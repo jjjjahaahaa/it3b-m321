@@ -42,6 +42,8 @@ erreichbar.
 - [`docs/plan/2026-09-04-chat-service-bootstrap.md`](docs/plan/2026-09-04-chat-service-bootstrap.md)
   — Schritt-für-Schritt-Plan für den ersten Service: Projekt anlegen, Datenbank und Broker
   anbinden, Nachrichten lesen und senden. Jeder Schritt mit Test.
+- [`docs/betrieb.md`](docs/betrieb.md) — starten, prüfen, aufräumen. Dazu die Stolpersteine,
+  über die man beim ersten Mal fällt.
 - [`CLAUDE.md`](CLAUDE.md) — Codestil-Regeln für dieses Projekt. Gelten auch für dich.
 - `docs/skizze-architektur.heic` — die Handskizze aus dem Unterricht, von der die Planung ausgeht.
 
@@ -59,5 +61,21 @@ Die vollständigen Regeln stehen in [`CLAUDE.md`](CLAUDE.md).
 
 ## Stand
 
-Das Repository enthält im Moment die Planung und die Dokumente. Der Code entsteht im Unterricht
-entlang des Bootstrap-Plans, Task für Task.
+Der **Bootstrap ist abgeschlossen**. Es gibt einen lauffähigen `chat-service` mit zwei Endpunkten,
+dazu PostgreSQL und RabbitMQ in `docker-compose`.
+
+| Aufgabe aus dem Bootstrap-Plan | Stand |
+|---|---|
+| 1 — Projekt anlegen, Swagger erreichbar | fertig |
+| 2 — PostgreSQL und RabbitMQ in docker-compose | fertig |
+| 3 — `GET /api/messages` liest den Verlauf | fertig |
+| 4 — `POST /api/messages` publiziert auf den Fanout-Exchange | fertig |
+
+Wie man den Stand startet und prüft, steht in [`docs/betrieb.md`](docs/betrieb.md).
+
+**Wichtig zum Verständnis:** eine gesendete Nachricht landet im Broker, aber **nicht** in der
+Datenbank. Das ist Absicht. Der `chat-service` publiziert nur, geschrieben wird vom
+`batch-service` — und der ist der nächste Schritt.
+
+Danach folgen, in dieser Reihenfolge: Raumverwaltung, Keycloak, der Live-Kanal für neue
+Nachrichten, zuletzt Gateway und Weboberfläche.
