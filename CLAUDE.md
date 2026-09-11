@@ -40,3 +40,17 @@ selbst zu lösen. Regeln dafür:
 
 Erklären statt abliefern. Zu jeder Änderung in wenigen Sätzen: was wurde gemacht, warum so, und
 welcher Teil davon Prüfungsstoff ist.
+
+## Git und GitHub
+
+Dieses Repository ist ein **Fork**. Gearbeitet wird ausschliesslich im eigenen Fork
+(`origin`), niemals im Original des Lehrers (`upstream`).
+
+- **Nie einen Pull Request auf `upstream` öffnen.** Weder über die Weboberfläche noch mit
+  `gh pr create`. Auch nicht vorschlagen. Pull Requests gehen immer nur von einem Branch
+  des eigenen Forks auf `main` des eigenen Forks.
+- Bei `gh pr create` muss `--repo` auf den eigenen Fork zeigen. Ohne diese Angabe wählt das
+  Werkzeug bei einem Fork von sich aus das Original als Ziel.
+- Nach `upstream` wird **nicht** gepusht. Die Push-Adresse ist dafür bewusst gesperrt.
+- Von `upstream` darf gelesen werden (`git fetch upstream`), um Änderungen des Lehrers
+  nachzuziehen.
