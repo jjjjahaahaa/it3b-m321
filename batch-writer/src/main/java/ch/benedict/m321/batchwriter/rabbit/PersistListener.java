@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import ch.benedict.m321.batchwriter.message.BadDataException;
+import ch.benedict.m321.batchwriter.message.DatabaseUnavailableException;
 import ch.benedict.m321.batchwriter.message.IncomingMessage;
 import ch.benedict.m321.batchwriter.message.InvalidMessageException;
 import ch.benedict.m321.batchwriter.message.MessageParser;
@@ -14,6 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 /**
@@ -34,6 +36,7 @@ public class PersistListener {
 
     private final MessageParser parser;
     private final MessageRepository repository;
+    private final long retryPauseMillis;
 
     /**
      * Eine Nachricht zusammen mit ihrer Lieferungsnummer. Die Nummer braucht man, um genau diese
@@ -42,10 +45,15 @@ public class PersistListener {
     private record Delivery(long deliveryTag, IncomingMessage message) {
     }
 
-    /** Spring reicht Parser und Repository herein (Konstruktor-Injektion). */
-    public PersistListener(MessageParser parser, MessageRepository repository) {
+    /**
+     * Spring reicht Parser und Repository herein (Konstruktor-Injektion) und die Wartepause aus
+     * application.yml (Umgebungsvariable DB_RETRY_PAUSE_MS).
+     */
+    public PersistListener(MessageParser parser, MessageRepository repository,
+            @Value("${batch.db-retry-pause-ms}") long retryPauseMillis) {
         this.parser = parser;
         this.repository = repository;
+        this.retryPauseMillis = retryPauseMillis;
     }
 
     /**
@@ -53,12 +61,21 @@ public class PersistListener {
      * Faengt jeden unerwarteten Fehler ab und gibt das Paket dann von Hand an die Queue zurueck,
      * weil das Framework bei manueller Bestaetigung nichts zurueckgibt. Ohne diese Rueckgabe blieben
      * die Nachrichten unbestaetigt haengen und der Konsument stuende still.
+     *
+     * Wird der Dienst beendet, waehrend er auf die Datenbank wartet, unterbricht Spring den Thread.
+     * Dann geht das offene Paket ebenfalls zurueck in die Queue, damit es nicht verloren ist.
      */
     @RabbitListener(id = "persistListener", queues = RabbitConfiguration.PERSIST_QUEUE,
             containerFactory = "batchContainerFactory")
     public void onBatch(List<Message> rawMessages, Channel channel) throws IOException {
         try {
             handleBatch(rawMessages, channel);
+        } catch (InterruptedException stopping) {
+            // Das Unterbrechungszeichen wieder setzen, damit Spring merkt, dass der Thread beendet werden soll.
+            Thread.currentThread().interrupt();
+            log.info("Dienst wird beendet, das offene Paket mit {} Nachrichten geht zurueck in die Queue",
+                    rawMessages.size());
+            returnBatchToQueue(rawMessages, channel);
         } catch (RuntimeException unexpected) {
             log.error("Unerwarteter Fehler, das Paket mit {} Nachrichten geht zurueck in die Queue",
                     rawMessages.size(), unexpected);
@@ -67,7 +84,7 @@ public class PersistListener {
     }
 
     /** Ablauf eines Pakets: Unbrauchbares aussortieren, den Rest schreiben und bestaetigen. */
-    private void handleBatch(List<Message> rawMessages, Channel channel) throws IOException {
+    private void handleBatch(List<Message> rawMessages, Channel channel) throws IOException, InterruptedException {
         List<Delivery> deliveries = parseOrReject(rawMessages, channel);
         writeAndAcknowledge(deliveries, channel);
     }
@@ -97,7 +114,7 @@ public class PersistListener {
      * Zeile wegen ihrer Daten ab, war die ganze Transaktion umsonst (Rollback). Dann wird dasselbe Paket
      * Zeile fuer Zeile geschrieben, damit nur die wirklich kaputte Zeile verloren geht.
      */
-    private void writeAndAcknowledge(List<Delivery> deliveries, Channel channel) throws IOException {
+    private void writeAndAcknowledge(List<Delivery> deliveries, Channel channel) throws IOException, InterruptedException {
         List<IncomingMessage> messages = new ArrayList<>();
         for (Delivery delivery : deliveries) {
             messages.add(delivery.message());
@@ -105,7 +122,7 @@ public class PersistListener {
 
         try {
             // Erst wenn diese Zeile durch ist, hat die Datenbank das Paket committet.
-            repository.insertBatch(messages);
+            writePatiently(messages);
         } catch (BadDataException brokenRow) {
             log.warn("Das Paket enthaelt eine Zeile, die die Datenbank ablehnt. Schreibe es Zeile fuer Zeile: {}",
                     brokenRow.getMessage());
@@ -124,15 +141,35 @@ public class PersistListener {
      * Der Einzelweg nach einem gescheiterten Paket: jede Nachricht in ihrer eigenen Transaktion.
      * Gelingt es, wird bestaetigt. Lehnt die Datenbank genau diese Zeile ab, wird sie abgelehnt.
      */
-    private void writeOneByOne(List<Delivery> deliveries, Channel channel) throws IOException {
+    private void writeOneByOne(List<Delivery> deliveries, Channel channel) throws IOException, InterruptedException {
         for (Delivery delivery : deliveries) {
             try {
-                repository.insertOne(delivery.message());
+                writePatiently(List.of(delivery.message()));
                 channel.basicAck(delivery.deliveryTag(), false);
             } catch (BadDataException brokenRow) {
                 log.warn("Nachricht {} wird von der Datenbank abgelehnt und geht nach chat.dlq: {}",
                         delivery.message().id(), brokenRow.getMessage());
                 reject(channel, delivery.deliveryTag());
+            }
+        }
+    }
+
+    /**
+     * Schreibt die Nachrichten und wartet, so lange die Datenbank nicht antwortet. Die Nachrichten
+     * bleiben in dieser Zeit unbestaetigt beim Broker: nichts geht verloren, und die Queue waechst
+     * sichtbar. Die Schleife endet nur mit Erfolg, mit einer BadDataException (die Zeile ist kaputt,
+     * Warten hilft nicht) oder wenn der Thread beim Beenden unterbrochen wird.
+     */
+    private void writePatiently(List<IncomingMessage> messages) throws InterruptedException {
+        while (true) {
+            try {
+                repository.insertBatch(messages);
+                return;
+            } catch (DatabaseUnavailableException unavailable) {
+                log.warn("Datenbank antwortet nicht, neuer Versuch in {} ms: {}",
+                        retryPauseMillis, unavailable.getMessage());
+                // Ohne diese Pause wuerde der Dienst die Datenbank im Sekundentakt bestuermen.
+                Thread.sleep(retryPauseMillis);
             }
         }
     }

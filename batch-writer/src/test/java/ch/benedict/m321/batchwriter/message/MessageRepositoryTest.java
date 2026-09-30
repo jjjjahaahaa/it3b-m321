@@ -105,16 +105,6 @@ class MessageRepositoryTest {
         assertThat(countInRoom(roomId)).isEqualTo(1);
     }
 
-    /** Ein einzelner Schreibvorgang funktioniert wie ein Paket aus einer Nachricht. */
-    @Test
-    void insertOneWritesOneRow() throws Exception {
-        UUID roomId = TestInfrastructure.createRoom();
-
-        repository.insertOne(newMessage(roomId, "allein"));
-
-        assertThat(countInRoom(roomId)).isEqualTo(1);
-    }
-
     /**
      * Ein unbekannter Raum verletzt den Fremdschluessel (SQLSTATE 23503). Das ist ein Datenfehler.
      * Wichtig: das ganze Paket wird zurueckgerollt, auch die gueten Nachrichten davor.

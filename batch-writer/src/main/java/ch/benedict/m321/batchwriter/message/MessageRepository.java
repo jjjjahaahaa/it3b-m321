@@ -59,14 +59,6 @@ public class MessageRepository {
     }
 
     /**
-     * Schreibt eine einzelne Nachricht. Das ist ein Paket aus einer Nachricht. Gebraucht wird es fuer
-     * den Einzelweg, wenn ein Paket an einer kaputten Zeile gescheitert ist.
-     */
-    public void insertOne(IncomingMessage message) {
-        insertBatch(List.of(message));
-    }
-
-    /**
      * Sammelt alle Zeilen in einem JDBC-Batch, sendet sie und bestaetigt mit commit. Scheitert etwas,
      * wird zurueckgerollt, damit keine halbe Transaktion in der Datenbank haengen bleibt.
      */
