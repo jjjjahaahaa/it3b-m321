@@ -10,7 +10,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.UUID;
 import java.util.Base64;
 import java.util.concurrent.TimeoutException;
 
@@ -136,6 +140,33 @@ public final class TestInfrastructure {
     /** Oeffnet eine neue, eigene Verbindung zur Test-Datenbank fuer Pruefungen im Test. */
     public static Connection openDatabaseConnection() throws SQLException {
         return DriverManager.getConnection(jdbcUrl(), DATABASE_USER, DATABASE_PASSWORD);
+    }
+
+    /**
+     * Legt einen neuen Raum an und gibt seine ID zurueck. Jede Nachricht braucht einen Raum
+     * (Fremdschluessel). Jeder Test nimmt seinen eigenen Raum, damit die Zaehlungen der Tests
+     * sich nicht gegenseitig stoeren.
+     */
+    public static UUID createRoom() throws SQLException {
+        UUID roomId = UUID.randomUUID();
+        String sql = "INSERT INTO room (id, name, created_by, created_at) VALUES (?, 'Testraum', 'test', now())";
+
+        try (Connection connection = openDatabaseConnection();
+             PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setObject(1, roomId);
+            statement.executeUpdate();
+        }
+        return roomId;
+    }
+
+    /** Fuehrt eine Abfrage aus, die genau eine Zahl liefert (zum Beispiel count(*)), und gibt diese Zahl zurueck. */
+    public static long queryNumber(String sql) throws SQLException {
+        try (Connection connection = openDatabaseConnection();
+             Statement statement = connection.createStatement();
+             ResultSet result = statement.executeQuery(sql)) {
+            result.next();
+            return result.getLong(1);
+        }
     }
 
     /** Adresse des Test-Brokers vom Testrechner aus (Docker vergibt den Port zufaellig). */
