@@ -249,6 +249,33 @@ public final class TestInfrastructure {
         return lastValue;
     }
 
+    /**
+     * Wartet, bis in der Queue genau die erwartete Zahl wartender Nachrichten liegt. Gibt die zuletzt
+     * gelesene Zahl zurueck. Gebraucht fuer chat.dlq: das Weiterreichen dorthin geschieht im Broker
+     * asynchron und dauert einen kurzen Moment.
+     */
+    public static int waitUntilMessageCountIs(String queueName, int expected, int timeoutSeconds) throws IOException, TimeoutException, InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutSeconds * 1000L;
+        int lastValue = countMessages(queueName);
+        while (lastValue != expected && System.currentTimeMillis() < deadline) {
+            Thread.sleep(100);
+            lastValue = countMessages(queueName);
+        }
+        return lastValue;
+    }
+
+    /** Holt die vorderste Nachricht aus einer Queue und gibt ihren Koerper als Text zurueck (null, wenn keine da ist). */
+    public static String takeOneBody(String queueName) throws IOException, TimeoutException {
+        try (com.rabbitmq.client.Connection brokerConnection = newBrokerConnection();
+             Channel channel = brokerConnection.createChannel()) {
+            com.rabbitmq.client.GetResponse response = channel.basicGet(queueName, true);
+            if (response == null) {
+                return null;
+            }
+            return new String(response.getBody(), StandardCharsets.UTF_8);
+        }
+    }
+
     /** Leert eine Queue. Tests, die die Dead-Letter-Queue zaehlen, starten damit von null. */
     public static void purgeQueue(String queueName) throws IOException, TimeoutException {
         try (com.rabbitmq.client.Connection brokerConnection = newBrokerConnection();
