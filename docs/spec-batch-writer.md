@@ -139,11 +139,11 @@ das Paket nie voll werden und läuft immer ins Zeitlimit. Prefetch = Paketgröss
 | F3 | Nachricht ist kein gültiges JSON oder es fehlt ein Feld | sofort ablehnen ohne Wiedereinreihen | Nachricht liegt in `chat.dlq` |
 | F4 | Datenbank lehnt eine Zeile ab (zu lang, unbekannter Raum, unzulässiges Zeichen) | Paket zurückrollen, **dasselbe Paket Zeile für Zeile** schreiben, nur die kaputte Zeile ablehnen | Rest gespeichert, eine Zeile in `chat.dlq` |
 | F5 | Unbekannter Datenbankfehler | wie F2: warten und neu versuchen | nichts geht verloren |
-| F6 | Dienst wird zwischen Commit und ACK gestoppt (S4) | RabbitMQ stellt das Paket wieder zu | doppelt zugestellt, einmal gespeichert (F1) |
+| F6 | Dienst wird zwischen Commit und ACK gestoppt oder stirbt (S4) | RabbitMQ stellt das Paket wieder zu und zählt die Zustellung mit | doppelt zugestellt, einmal gespeichert (F1) |
 | F7 | RabbitMQ nicht erreichbar | Verbindung baut sich von selbst wieder auf; unbestätigte Pakete kommen erneut | wie F6 |
-| F8 | Unerwarteter Programmfehler im Listener | der Listener fängt ihn selbst ab und gibt das **ganze Paket** mit `nack` an die Queue zurück; nach 3 Zustellungen wandert es in `chat.dlq` | Sicherheitsnetz (`x-delivery-limit: 3`) |
+| F8 | Unerwarteter Programmfehler | wird auf die einzelne Nachricht eingegrenzt (Einzelweg wie F4); was allein scheitert, geht nach `chat.dlq`. Bricht sonst etwas im Listener ab, gehen die noch offenen Nachrichten des Pakets nach `chat.dlq`. **Nie** zurück in die Queue | nichts geht still verloren, keine Endlosschleife |
 | F9 | Zweite Instanz (S6) | konkurrierender Konsument an derselben Queue | jede Nachricht geht an genau eine Instanz |
-| F10 | Dienst wird beendet (SIGTERM) | neue Lieferung stoppt, Warteschleife aus F2 wird unterbrochen, unbestätigte Nachrichten kommen zurück in die Queue | nichts verloren |
+| F10 | Dienst wird beendet (SIGTERM) | die Warteschleife aus F2 wird unterbrochen, das offene Paket wird mit `nack` und Wiedereinreihen zurückgegeben (das zählt nicht gegen das Zustelllimit) | nichts verloren |
 
 ### 3.3 Begründungen zu den Fehlerfällen
 
@@ -157,15 +157,16 @@ neue Zeile erzeugen. Innerhalb eines einzigen Pakets darf dieselbe ID sogar zwei
 ist bei `DO NOTHING` erlaubt.
 
 **F2 — Datenbank weg: warum warten und nicht ablehnen oder beenden.**
-- *Ablehnen mit Wiedereinreihen* (`nack` mit `requeue`): RabbitMQ stellt sofort wieder zu, es
-  entsteht eine Endlosschleife mit voller Geschwindigkeit. Jede Runde zählt ausserdem gegen das
-  `x-delivery-limit`, nach drei Runden landeten **gesunde** Nachrichten in `chat.dlq`, nur weil die
-  Datenbank kurz weg war.
+- *Ablehnen mit Wiedereinreihen* (`nack` mit `requeue`): RabbitMQ stellt sofort wieder zu. Es entsteht
+  eine Endlosschleife ohne Pause: das ganze Paket wandert bei jeder Runde erneut über die Leitung und
+  das Log läuft voll. Gemessen (RabbitMQ 4): ein `nack` mit `requeue` zählt **nicht** gegen
+  `x-delivery-limit`. 29 Zustellungen derselben Nachricht, nichts in `chat.dlq`. Gesunde Nachrichten
+  gingen dabei also nicht verloren, aber der Dienst dreht sich im Kreis, und niemand merkt es.
 - *Dienst beenden:* ohne Neustartregel ist der Schreiber danach tot. S7 verlangt ausdrücklich, dass er
   ohne Neustart von Hand weiterläuft.
-- *Warten:* der Konsument hält die Nachrichten unbestätigt. Die Queue wächst sichtbar in der
-  Management-UI. Das ist gewollt (Backpressure, `PLANUNG.md` 2.4): lieber ein sichtbar wachsender
-  Rückstau als eine still verlorene Nachricht.
+- *Warten:* der Konsument hält die Nachrichten unbestätigt und versucht es alle `DB_RETRY_PAUSE_MS`
+  neu. Die Queue wächst sichtbar in der Management-UI. Das ist gewollt (Backpressure, `PLANUNG.md`
+  2.4): lieber ein sichtbar wachsender Rückstau als eine still verlorene Nachricht.
 
 Damit ein Ausfall schnell auffällt und nicht ewig hängt, setzt die JDBC-Verbindung
 `connectTimeout=5` und `socketTimeout=30` (Sekunden), der Verbindungspool wartet höchstens 5 s auf
@@ -182,14 +183,27 @@ Warum F4 Zeile für Zeile schreibt: eine einzige kaputte Zeile lässt die ganze 
 scheitern (`PLANUNG.md` 2.4). Ohne den Einzelweg stünden alle 500 in der Dead-Letter-Queue. Mit ihm
 nur die eine. Der Einzelweg gilt nur für das betroffene Paket, der Normalfall bleibt gebündelt.
 
-**F8 — Sicherheitsnetz.** Der Listener fängt die erwarteten Fehler selbst ab. Was trotzdem
-herauskommt, ist ein Programmfehler. Ihn endlos zu wiederholen wäre falsch, deshalb greift das
-`x-delivery-limit: 3` der Queue. Das Zurückgeben macht der Listener **von Hand**: bei manueller
-Bestätigung gibt Spring AMQP ein Paket nach einer Ausnahme *nicht* von selbst zurück (im Quelltext von
-`BlockingQueueConsumer.rollbackOnExceptionIfNecessary` geprüft). Die Nachrichten blieben unbestätigt
-hängen, und der Konsument stünde still. Deshalb ein einziges `basicNack(höchsteNummer, multiple=true,
-requeue=true)`: es gibt alles zurück, was in diesem Paket noch offen ist, und lässt bereits
-Bestätigtes in Ruhe.
+**F8 — Unerwarteter Fehler: eingrenzen, nie zurückgeben.** Der Listener fängt die erwarteten Fehler
+selbst ab (F1 bis F5). Was trotzdem herauskommt, ist ein Programmfehler. Zwei Dinge sind dabei
+wichtig:
+
+1. *Die Nachricht wird nicht wieder eingereiht.* Ein `nack` mit `requeue` zählt in RabbitMQ 4 nicht
+   gegen das Zustelllimit (siehe F2, gemessen). Eine Nachricht, die einen Fehler auslöst, käme also
+   endlos wieder. Stattdessen wird der Fehler mit dem Einzelweg auf die eine Nachricht eingegrenzt.
+   Sie geht nach `chat.dlq`, die anderen werden gespeichert.
+2. *Der Listener darf nie mit offenen Nachrichten zurückkehren.* Bei manueller Bestätigung gibt Spring
+   AMQP nach einer Ausnahme nichts zurück (im Quelltext von
+   `BlockingQueueConsumer.rollbackOnExceptionIfNecessary` geprüft). Die Nachrichten blieben
+   unbestätigt hängen, und der Konsument stünde still, ohne dass jemand es merkt. Deshalb fängt der
+   Listener jede Ausnahme selbst ab und lehnt alles Offene mit einem einzigen
+   `basicNack(höchsteNummer, multiple=true, requeue=false)` ab. Das betrifft nur noch unbestätigte
+   Nachrichten dieses Pakets.
+
+**Wozu dann `x-delivery-limit: 3`?** Es zählt das, was der Dienst nicht selbst abfangen kann: er stirbt
+mit einem unbestätigten Paket (Absturz, `kill`, Neustart des Containers). Dabei schliesst der Kanal ohne
+ACK, RabbitMQ stellt das Paket zu und erhöht `x-delivery-count` (gemessen: Kanal schliessen ohne ACK
+zählt, nach 3 Zustellungen liegt die Nachricht in `chat.dlq`). Hängt eine Nachricht so den Dienst
+wiederholt ab, wird sie also nach dem dritten Mal ausgesondert und blockiert nicht ewig.
 
 **F9 — Zwei Instanzen brauchen keine Absprache.** Beide hängen an derselben Queue, RabbitMQ verteilt
 die Nachrichten (Competing Consumers). Es gibt keinen gemeinsamen Zustand im Dienst. Schreiben
@@ -255,7 +269,7 @@ Befehl ein.
 | Objekt | Art | Einstellungen |
 |---|---|---|
 | Exchange `chat.messages` | fanout, dauerhaft | wird auch vom `chat-service` angemeldet, identische Werte |
-| Queue `chat.persist` | **Quorum-Queue**, dauerhaft | `x-delivery-limit: 3`, Dead-Letter-Exchange `""` (Standard-Exchange) mit Routing-Key `chat.dlq` |
+| Queue `chat.persist` | **Quorum-Queue**, dauerhaft | `x-delivery-limit: 3` (zählt nur Zustellungen nach einem Absturz, siehe F8), Dead-Letter-Exchange `""` (Standard-Exchange) mit Routing-Key `chat.dlq` |
 | Queue `chat.dlq` | klassisch, dauerhaft | nimmt abgelehnte Nachrichten auf |
 | Bindung | `chat.messages` → `chat.persist` | |
 

@@ -159,11 +159,31 @@ kaputten in `chat.dlq` · `chat.persist` am Ende leer.
 
 **Commit:** `feat(batch-writer): kaputte Nachrichten in chat.dlq, Rest des Pakets bleibt erhalten`
 
-## Aufgabe 8 — Datenbank fällt aus (F2, S7)
+## Aufgabe 8 — Unerwartete Fehler eingrenzen statt zurückgeben (F8)
+
+*Diese Aufgabe kam nachträglich dazu.* Beim Bau von Aufgabe 8 (jetzt 9) zeigte eine Messung am Broker,
+dass `nack` mit `requeue` das Zustelllimit nicht verbraucht (Spezifikation F2, F8). Der Listener aus
+Aufgabe 5, der ein Paket nach einem Fehler zurück in die Queue gab, konnte sich so endlos im Kreis
+drehen. Dieser Schritt ersetzt das durch Eingrenzen und Ablehnen.
+
+**Warum jetzt:** Er baut auf dem Einzelweg aus Aufgabe 7 auf und muss vor dem Datenbankausfall stehen,
+weil der Warteschleife sonst der Rückhalt fehlt: alles, was nicht «Datenbank weg» ist, muss sicher enden.
+
+- Jede Ausnahme bei einer einzelnen Nachricht (Umwandeln, Schreiben) → diese Nachricht nach `chat.dlq`.
+- Ein Fehler beim Schreiben des Pakets, der nicht «Datenbank weg» ist → Einzelweg.
+- Letzte Auffangstelle im Listener: alles Offene ablehnen (`requeue=false`), nie zurückgeben.
+
+**Test:** `UnexpectedErrorTest` — das Repository wirft für eine bestimmte Nachricht einen
+Programmfehler (`@MockitoSpyBean`). Paket mit 5 guten, der Fehlernachricht und 5 guten → 10 gespeichert,
+1 in `chat.dlq`, `chat.persist` leer, Listener läuft weiter.
+
+**Commit:** `fix(batch-writer): unerwartete Fehler auf die Nachricht eingrenzen, nie zurueck in die Queue`
+
+## Aufgabe 9 — Datenbank fällt aus (F2, S7)
 
 **Warum jetzt:** Der schwierigste Fall, er braucht alles Vorherige: er darf weder Nachrichten
 verlieren (nicht ablehnen) noch den Dienst beenden. Erst wenn die Unterscheidung «Zeile kaputt» /
-«Datenbank weg» (Aufgabe 7) steht, lässt sie sich sauber durchziehen.
+«Datenbank weg» (Aufgaben 7 und 8) steht, lässt sie sich sauber durchziehen.
 
 - Warteschleife mit `DB_RETRY_PAUSE_MS`, unterbrechbar beim Beenden.
 
@@ -173,7 +193,7 @@ alle 300 in der Tabelle, `chat.dlq` leer, der Listener wurde nicht neu gestartet
 
 **Commit:** `feat(batch-writer): bei Datenbankausfall warten und wiederholen statt ablehnen`
 
-## Aufgabe 9 — Stack: Dockerfiles, Compose, `.env.example`, keine Ports
+## Aufgabe 10 — Stack: Dockerfiles, Compose, `.env.example`, keine Ports
 
 **Warum jetzt:** Ein Dienst, der nur in Tests läuft, hilft S2 bis S7 nicht. Die Verpackung kommt
 zuletzt, weil sie den fertigen Dienst braucht. Der Test dafür ist der echte Start.
@@ -189,7 +209,7 @@ der Tabelle.
 
 **Commit:** `feat(infra): batch-writer und chat-service im Compose-Stack, keine Ports nach aussen`
 
-## Aufgabe 10 — Abnahmeskript für S2 bis S8
+## Aufgabe 11 — Abnahmeskript für S2 bis S8
 
 **Warum jetzt:** Die Szenarien der Spezifikation (Abschnitt 5) werden ausführbar. Erst am fertigen
 Stack lassen sie sich ehrlich messen. Das Skript ersetzt «bei mir geht es» durch eine Tabelle.
@@ -199,7 +219,7 @@ den Abschnitt «Messwerte» unten.
 
 **Commit:** `test: Abnahmeskript fuer die Szenarien S2 bis S8`
 
-## Aufgabe 11 — Kommentarregeln als Test (S8)
+## Aufgabe 12 — Kommentarregeln als Test (S8)
 
 **Warum jetzt:** Sobald der Code steht, lässt sich die Regel «Kommentar über jeder Klasse und
 Methode» prüfen und nachziehen. Vorher würde der Test bei jedem Zwischenstand fehlschlagen.
@@ -209,7 +229,7 @@ Kommentar davor sowie jedes `stream()`. Erst rot (fehlende Kommentare), dann gr�
 
 **Commit:** `test(batch-writer): Kommentarregeln und Stream-Verbot automatisch pruefen`
 
-## Aufgabe 12 — Doku nachführen
+## Aufgabe 13 — Doku nachführen
 
 **Warum zuletzt:** Beschreibt den Endstand. README-Tabelle «Stand», `docs/betrieb.md` (neuer Start
 ohne veröffentlichte Ports), Messwerte in diesem Plan.
