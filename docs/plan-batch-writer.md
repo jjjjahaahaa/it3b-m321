@@ -29,7 +29,7 @@ it3b-m321/
 ├── docker-compose.yml                   postgres, rabbitmq, chat-service, batch-writer
 ├── rabbitmq/
 │   ├── definitions.json                 Exchange, Queues, Bindung
-│   └── rabbitmq.conf                    sagt dem Broker: lade definitions.json
+│   └── healthcheck.sh                   Broker gesund = läuft und chat.persist existiert
 ├── scripts/abnahme.sh                   S2 bis S8 als Skript
 ├── chat-service/Dockerfile              (neu, damit der Dienst im Stack läuft)
 └── batch-writer/
@@ -68,11 +68,14 @@ Sie laufen auch ohne laufende Container (geprüft).
 Queue-Einstellungen (Quorum, `x-delivery-limit`, Dead-Letter) sind Teil des Vertrags. Sie werden
 zuerst festgeschrieben und geprüft, bevor ein Konsument darauf aufsetzt.
 
-- `rabbitmq/definitions.json`, `rabbitmq/rabbitmq.conf` (Spezifikation 4.3).
+- `rabbitmq/definitions.json` (Spezifikation 4.3). Die Datei wird nach dem Start mit
+  `rabbitmqctl import_definitions` eingespielt. `load_definitions` beim Start wurde ausprobiert und
+  verworfen, weil der Broker dann den Benutzer aus `.env` nicht mehr anlegt.
 - Modul `batch-writer`: `pom.xml` (Spring AMQP, JDBC, PostgreSQL-Treiber, Jackson, Testcontainers),
   leere `BatchWriterApplication`.
 - Testhilfe `TestInfrastructure`: startet **einmal** ein PostgreSQL mit `db/01-schema.sql` und ein
-  RabbitMQ mit den beiden Dateien oben. Beide sind für alle Testklassen gemeinsam.
+  RabbitMQ, in das sie `rabbitmq/definitions.json` einspielt. Beide sind für alle Testklassen
+  gemeinsam.
 
 **Test:** `InfrastructureTest` — `chat.persist` ist eine Quorum-Queue mit Limit 3 und Dead-Letter auf
 `chat.dlq`, `chat.dlq` existiert, die Bindung an `chat.messages` besteht, die Tabelle `message` hat
@@ -175,7 +178,8 @@ alle 300 in der Tabelle, `chat.dlq` leer, der Listener wurde nicht neu gestartet
 **Warum jetzt:** Ein Dienst, der nur in Tests läuft, hilft S2 bis S7 nicht. Die Verpackung kommt
 zuletzt, weil sie den fertigen Dienst braucht. Der Test dafür ist der echte Start.
 
-- `batch-writer/Dockerfile`, `chat-service/Dockerfile`, `docker-compose.yml`, `.env.example`,
+- `batch-writer/Dockerfile`, `chat-service/Dockerfile`, `docker-compose.yml`,
+  `rabbitmq/healthcheck.sh`, `.env.example`,
   `.env` in `.gitignore`, `chat-service/application.yml` liest Hostnamen und Zugang aus der Umgebung.
 - Die bewusste Abweichung aus `docs/betrieb.md` (veröffentlichte Ports) entfällt.
 

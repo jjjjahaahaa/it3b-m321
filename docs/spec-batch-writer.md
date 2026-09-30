@@ -32,7 +32,7 @@ nur, er schreibt nie in die Datenbank.
 | Verlauf lesen | Das macht der `chat-service` (`GET /api/messages`). |
 | Räume, Mitgliedschaften, Keycloak | Ausdrücklich nicht Teil von Bewertung 1. |
 | Schema anlegen oder ändern | Das Schema entsteht beim ersten Start von PostgreSQL (Abschnitt 4.2). |
-| Queues und Exchange anlegen | Das macht der RabbitMQ-Broker beim Start (Abschnitt 4.3). |
+| Queues und Exchange anlegen | Das richtet der Broker-Container selbst ein (Abschnitt 4.3). |
 | Nachrichten prüfen, ob der Absender im Raum sein darf | Das ist Sache des `chat-service` vor dem Publizieren. |
 | Inhalt verändern | Er schreibt exakt, was ankommt. ID und Zeitstempel bleiben unangetastet. |
 
@@ -241,8 +241,11 @@ wie Flyway. Für den Unterricht ist das die einfachste Lösung.
 
 ### 4.3 Wo Exchange und Queues entstehen
 
-Der Broker legt sie beim Start selbst an, aus der Datei `rabbitmq/definitions.json`
-(`load_definitions` in `rabbitmq/rabbitmq.conf`). Dasselbe File verwenden die Tests.
+Sie stehen in der Datei `rabbitmq/definitions.json`. Der Broker spielt sie **nach seinem Start** mit
+`rabbitmqctl import_definitions` ein. Ausgelöst wird das vom Healthcheck des Broker-Containers
+(`rabbitmq/healthcheck.sh`): solange `chat.persist` nicht existiert, importiert er die Datei. Der
+Broker gilt erst als gesund, wenn die Queue da ist. Die Tests spielen dieselbe Datei mit demselben
+Befehl ein.
 
 | Objekt | Art | Einstellungen |
 |---|---|---|
@@ -253,9 +256,16 @@ Der Broker legt sie beim Start selbst an, aus der Datei `rabbitmq/definitions.js
 
 **Warum der Broker und nicht der Dienst.** Legte der `batch-writer` die Queue an, gäbe es nach
 `docker compose up` ein Zeitfenster, in dem der `chat-service` schon Nachrichten annimmt, die Queue
-aber noch nicht existiert. Ein Exchange ohne gebundene Queue **verwirft still**. Mit der
-Definitionsdatei existiert die Queue, sobald der Broker läuft, und der `chat-service` startet erst
-danach. Ausserdem gibt es nur *eine* Quelle für die Queue-Einstellungen.
+aber noch nicht existiert. Ein Exchange ohne gebundene Queue **verwirft still**. Weil beide Dienste
+erst starten, wenn der Broker gesund ist, und der Broker erst gesund ist, wenn die Queue existiert,
+gibt es dieses Fenster nicht. Ausserdem gibt es nur *eine* Quelle für die Queue-Einstellungen.
+
+**Warum nicht `load_definitions` beim Start.** Das wurde zuerst geplant und ausprobiert. Es geht
+nicht: sobald der Broker beim Start Definitionen lädt, meldet er
+*«Will not seed default virtual host and user: have definitions to load»* und legt den Benutzer aus
+`RABBITMQ_DEFAULT_USER` **nicht** an. Dann kämen die Zugangsdaten entweder ins Repository (in die
+Definitionsdatei) oder der Login schlüge fehl. Der Import nach dem Start lässt den Benutzer
+unangetastet, und ein zweiter Import ist harmlos (gleiche Werte, nichts ändert sich).
 
 **Namensabweichung.** `PLANUNG.md` nennt die Dead-Letter-Queue `chat.persist.dlq`. Der Auftrag von
 Bewertung 1 nennt `chat.dlq`. Massgebend ist der Auftrag: **`chat.dlq`**.
@@ -288,8 +298,9 @@ Die Datei `.env` selbst gehört **nicht** ins Repository.
 - Dienste: `postgres`, `rabbitmq`, `chat-service`, `batch-writer`, alle im Netz `chat-net`.
 - **Kein Dienst veröffentlicht einen Port** auf dem Host (kein `ports:`-Eintrag). Zugriff von aussen
   geht nur über `docker compose exec`.
-- Startreihenfolge: `postgres` und `rabbitmq` melden sich erst als gesund, wenn sie antworten
-  (Healthcheck). `chat-service` und `batch-writer` starten erst danach.
+- Startreihenfolge: `postgres` meldet sich als gesund, wenn es Anfragen beantwortet. `rabbitmq`, wenn
+  es läuft **und** `chat.persist` existiert (Abschnitt 4.3). `chat-service` und `batch-writer`
+  starten erst danach.
 - `batch-writer` hat **keine** Neustartregel. Ein gestoppter Dienst (S4) soll gestoppt bleiben.
   Ein Fehler beim Start bleibt so sichtbar und dreht sich nicht im Kreis.
 - Skalieren geht ohne Anpassung: `docker compose up -d --scale batch-writer=2` (deshalb kein fester
