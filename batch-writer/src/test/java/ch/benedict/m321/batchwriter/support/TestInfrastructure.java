@@ -186,6 +186,38 @@ public final class TestInfrastructure {
         registry.add("spring.rabbitmq.password", TestInfrastructure::brokerPassword);
     }
 
+    /**
+     * Laesst die Datenbank "ausfallen": sie nimmt keine neuen Verbindungen mehr an, und alle
+     * bestehenden werden getrennt. Fuer den Dienst sieht das aus wie eine Datenbank, die weg ist
+     * oder neu startet. Die Verbindung dafuer geht auf die Standard-Datenbank "postgres", weil man
+     * sich mit der gesperrten Datenbank selbst nicht mehr verbinden kann.
+     */
+    public static void startDatabaseOutage() throws SQLException {
+        String lock = "ALTER DATABASE " + DATABASE_NAME + " ALLOW_CONNECTIONS false";
+        String disconnect = "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                          + "WHERE datname = '" + DATABASE_NAME + "' AND pid <> pg_backend_pid()";
+
+        try (Connection connection = openAdminConnection();
+             Statement statement = connection.createStatement()) {
+            statement.execute(lock);
+            statement.execute(disconnect);
+        }
+    }
+
+    /** Beendet den Ausfall: die Datenbank nimmt wieder Verbindungen an. */
+    public static void endDatabaseOutage() throws SQLException {
+        try (Connection connection = openAdminConnection();
+             Statement statement = connection.createStatement()) {
+            statement.execute("ALTER DATABASE " + DATABASE_NAME + " ALLOW_CONNECTIONS true");
+        }
+    }
+
+    /** Verbindung zur Standard-Datenbank "postgres" desselben Servers, fuer Eingriffe von aussen. */
+    private static Connection openAdminConnection() throws SQLException {
+        String adminUrl = "jdbc:postgresql://" + POSTGRES.getHost() + ":" + POSTGRES.getMappedPort(5432) + "/postgres";
+        return DriverManager.getConnection(adminUrl, DATABASE_USER, DATABASE_PASSWORD);
+    }
+
     /** Adresse des Test-Brokers vom Testrechner aus (Docker vergibt den Port zufaellig). */
     public static String brokerHost() {
         return RABBIT.getHost();

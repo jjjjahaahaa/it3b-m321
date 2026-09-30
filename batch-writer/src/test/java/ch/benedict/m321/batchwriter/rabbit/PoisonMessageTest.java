@@ -4,16 +4,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+import ch.benedict.m321.batchwriter.support.IntegrationTest;
 import ch.benedict.m321.batchwriter.support.TestInfrastructure;
 import ch.benedict.m321.batchwriter.support.TestMessages;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.amqp.rabbit.listener.MessageListenerContainer;
-import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -22,44 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Nachricht darf nie die guten Nachrichten im selben Paket mitreissen. Sie landet in chat.dlq,
  * alle anderen stehen in der Datenbank.
  */
-@SpringBootTest
-class PoisonMessageTest {
-
-    /** Sagt der gestarteten Anwendung, wo Datenbank und Broker der Testcontainer erreichbar sind. */
-    @DynamicPropertySource
-    static void connectToTestContainers(DynamicPropertyRegistry registry) {
-        TestInfrastructure.registerWith(registry);
-    }
-
-    @Autowired
-    private RabbitListenerEndpointRegistry listenerRegistry;
-
-    /** Leert die Dead-Letter-Queue, damit die Zaehlung in jedem Test bei null beginnt. */
-    @BeforeEach
-    void emptyDeadLetterQueue() throws Exception {
-        TestInfrastructure.purgeQueue("chat.dlq");
-    }
-
-    /** Zaehlt die Nachrichten eines Raums in der Datenbank. */
-    private String countInRoom(UUID roomId) {
-        return "SELECT count(*) FROM message WHERE room_id = '" + roomId + "'";
-    }
-
-    /**
-     * Legt alle Nachrichten in die Queue, waehrend der Listener angehalten ist, und startet ihn dann.
-     * So liegen sie sicher zusammen in EINEM Paket. Ohne das Anhalten koennte der Listener die ersten
-     * Nachrichten schon abholen, bevor die letzten da sind, und der Test prueft dann nicht mehr,
-     * was er pruefen soll.
-     */
-    private void publishAsOnePacket(List<String> bodies) throws Exception {
-        MessageListenerContainer container = listenerRegistry.getListenerContainer("persistListener");
-        container.stop();
-        try {
-            TestInfrastructure.publishJson("chat.messages", "", bodies);
-        } finally {
-            container.start();
-        }
-    }
+class PoisonMessageTest extends IntegrationTest {
 
     /**
      * F3: zehn Nachrichten, die fuenfte ist kein JSON. Die neun guten muessen gespeichert werden,

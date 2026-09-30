@@ -4,15 +4,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+import ch.benedict.m321.batchwriter.support.IntegrationTest;
 import ch.benedict.m321.batchwriter.support.TestInfrastructure;
 import ch.benedict.m321.batchwriter.support.TestMessages;
 import org.junit.jupiter.api.Test;
-import org.springframework.amqp.rabbit.listener.MessageListenerContainer;
-import org.springframework.amqp.rabbit.listener.RabbitListenerEndpointRegistry;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -21,27 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * viele Nachrichten mit wenigen Transaktionen (Szenario S4) und ein Zeitlimit, das fuer das GANZE
  * Paket gilt und nicht nur fuer die Pause zwischen zwei Nachrichten.
  */
-@SpringBootTest
-class BatchingTest {
-
-    /** Sagt der gestarteten Anwendung, wo Datenbank und Broker der Testcontainer erreichbar sind. */
-    @DynamicPropertySource
-    static void connectToTestContainers(DynamicPropertyRegistry registry) {
-        TestInfrastructure.registerWith(registry);
-    }
-
-    @Autowired
-    private RabbitListenerEndpointRegistry listenerRegistry;
-
-    /** Holt den Container, der den Listener betreibt, damit der Test ihn anhalten und starten kann. */
-    private MessageListenerContainer persistContainer() {
-        return listenerRegistry.getListenerContainer("persistListener");
-    }
-
-    /** Zaehlt die Nachrichten eines Raums in der Datenbank. */
-    private String countInRoom(UUID roomId) {
-        return "SELECT count(*) FROM message WHERE room_id = '" + roomId + "'";
-    }
+class BatchingTest extends IntegrationTest {
 
     /**
      * Szenario S4: der Schreiber steht, 1000 Nachrichten stauen sich in der Queue, dann laeuft er an.

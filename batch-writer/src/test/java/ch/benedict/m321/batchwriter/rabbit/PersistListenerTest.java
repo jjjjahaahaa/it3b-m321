@@ -4,13 +4,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+import ch.benedict.m321.batchwriter.support.IntegrationTest;
 import ch.benedict.m321.batchwriter.support.TestInfrastructure;
 import ch.benedict.m321.batchwriter.support.TestMessages;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -19,25 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * der Listener liest sie, schreibt sie und bestaetigt sie. Das ist der Normalfall aus
  * docs/spec-batch-writer.md, Abschnitt 3.1, dazu das Duplikat aus Szenario S5.
  */
-@SpringBootTest
-class PersistListenerTest {
-
-    /** Sagt der gestarteten Anwendung, wo Datenbank und Broker der Testcontainer erreichbar sind. */
-    @DynamicPropertySource
-    static void connectToTestContainers(DynamicPropertyRegistry registry) {
-        TestInfrastructure.registerWith(registry);
-    }
-
-    /** Leert die Dead-Letter-Queue, damit die Zaehlung in jedem Test bei null beginnt. */
-    @BeforeEach
-    void emptyDeadLetterQueue() throws Exception {
-        TestInfrastructure.purgeQueue("chat.dlq");
-    }
-
-    /** Zaehlt die Nachrichten eines Raums in der Datenbank. */
-    private String countInRoom(UUID roomId) {
-        return "SELECT count(*) FROM message WHERE room_id = '" + roomId + "'";
-    }
+class PersistListenerTest extends IntegrationTest {
 
     /**
      * Drei Nachrichten, wie der chat-service sie ueber den Exchange schickt: alle drei muessen in
