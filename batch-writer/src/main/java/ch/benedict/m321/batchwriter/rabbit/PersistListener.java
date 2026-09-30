@@ -28,6 +28,10 @@ import org.springframework.stereotype.Component;
  * Kaputte Nachrichten werden einzeln abgelehnt (NACK ohne Wiedereinreihen). RabbitMQ leitet sie dann
  * ueber die Dead-Letter-Einstellung der Queue nach chat.dlq weiter. Die guten im selben Paket bleiben
  * davon unberuehrt.
+ *
+ * Nichts wird je zurueck in die Queue gestellt, ausser beim Beenden des Dienstes. Der Grund: ein NACK
+ * mit Wiedereinreihen zaehlt in RabbitMQ 4 nicht gegen das Zustelllimit, eine fehlerausloesende
+ * Nachricht kaeme also endlos wieder (siehe docs/spec-batch-writer.md, F2 und F8).
  */
 @Component
 public class PersistListener {
@@ -58,9 +62,10 @@ public class PersistListener {
 
     /**
      * Wird von Spring aufgerufen, sobald ein Paket bereit ist: 500 Nachrichten oder das Zeitlimit.
-     * Faengt jeden unerwarteten Fehler ab und gibt das Paket dann von Hand an die Queue zurueck,
-     * weil das Framework bei manueller Bestaetigung nichts zurueckgibt. Ohne diese Rueckgabe blieben
-     * die Nachrichten unbestaetigt haengen und der Konsument stuende still.
+     * Letzte Auffangstelle: was hier noch als Fehler ankommt, wurde nirgends sonst abgefangen. Alle
+     * noch offenen Nachrichten werden abgelehnt (landen in chat.dlq). Das Framework tut das bei
+     * manueller Bestaetigung nicht von selbst. Ohne diese Zeile blieben die Nachrichten
+     * unbestaetigt haengen und der Konsument stuende still, ohne dass es jemand merkt.
      *
      * Wird der Dienst beendet, waehrend er auf die Datenbank wartet, unterbricht Spring den Thread.
      * Dann geht das offene Paket ebenfalls zurueck in die Queue, damit es nicht verloren ist.
@@ -77,9 +82,9 @@ public class PersistListener {
                     rawMessages.size());
             returnBatchToQueue(rawMessages, channel);
         } catch (RuntimeException unexpected) {
-            log.error("Unerwarteter Fehler, das Paket mit {} Nachrichten geht zurueck in die Queue",
+            log.error("Unerwarteter Fehler, die offenen Nachrichten des Pakets ({}) gehen nach chat.dlq",
                     rawMessages.size(), unexpected);
-            returnBatchToQueue(rawMessages, channel);
+            rejectOpenMessages(rawMessages, channel);
         }
     }
 
@@ -104,15 +109,21 @@ public class PersistListener {
             } catch (InvalidMessageException invalid) {
                 log.warn("Nachricht {} ist unbrauchbar und geht nach chat.dlq: {}", deliveryTag, invalid.getMessage());
                 reject(channel, deliveryTag);
+            } catch (RuntimeException bug) {
+                log.error("Beim Umwandeln von Nachricht {} ist ein unerwarteter Fehler passiert, sie geht nach chat.dlq",
+                        deliveryTag, bug);
+                reject(channel, deliveryTag);
             }
         }
         return deliveries;
     }
 
     /**
-     * Schreibt das Paket in EINER Transaktion und bestaetigt danach alle. Lehnt die Datenbank eine
-     * Zeile wegen ihrer Daten ab, war die ganze Transaktion umsonst (Rollback). Dann wird dasselbe Paket
-     * Zeile fuer Zeile geschrieben, damit nur die wirklich kaputte Zeile verloren geht.
+     * Schreibt das Paket in EINER Transaktion und bestaetigt danach alle. Scheitert das Paket (die
+     * Datenbank lehnt eine Zeile ab, oder ein Programmfehler tritt auf), war die ganze Transaktion
+     * umsonst. Dann wird dasselbe Paket Zeile fuer Zeile geschrieben, damit nur die Nachricht
+     * verloren geht, die wirklich schuld ist. Eine nicht erreichbare Datenbank kommt hier nie an:
+     * darauf wartet writePatiently.
      */
     private void writeAndAcknowledge(List<Delivery> deliveries, Channel channel) throws IOException, InterruptedException {
         List<IncomingMessage> messages = new ArrayList<>();
@@ -123,9 +134,10 @@ public class PersistListener {
         try {
             // Erst wenn diese Zeile durch ist, hat die Datenbank das Paket committet.
             writePatiently(messages);
-        } catch (BadDataException brokenRow) {
-            log.warn("Das Paket enthaelt eine Zeile, die die Datenbank ablehnt. Schreibe es Zeile fuer Zeile: {}",
-                    brokenRow.getMessage());
+        } catch (RuntimeException failure) {
+            // Entweder lehnt die Datenbank eine Zeile ab (BadDataException) oder es ist ein unerwarteter
+            // Fehler. In beiden Faellen wissen wir noch nicht, WELCHE Nachricht schuld ist.
+            log.warn("Das Paket ging nicht als Ganzes durch. Schreibe es Zeile fuer Zeile: {}", failure.toString());
             writeOneByOne(deliveries, channel);
             return;
         }
@@ -139,18 +151,36 @@ public class PersistListener {
 
     /**
      * Der Einzelweg nach einem gescheiterten Paket: jede Nachricht in ihrer eigenen Transaktion.
-     * Gelingt es, wird bestaetigt. Lehnt die Datenbank genau diese Zeile ab, wird sie abgelehnt.
+     * Gelingt es, wird bestaetigt. Scheitert genau diese eine Nachricht, wird sie abgelehnt.
      */
     private void writeOneByOne(List<Delivery> deliveries, Channel channel) throws IOException, InterruptedException {
         for (Delivery delivery : deliveries) {
-            try {
-                writePatiently(List.of(delivery.message()));
+            boolean written = tryToWriteOne(delivery);
+            if (written) {
                 channel.basicAck(delivery.deliveryTag(), false);
-            } catch (BadDataException brokenRow) {
-                log.warn("Nachricht {} wird von der Datenbank abgelehnt und geht nach chat.dlq: {}",
-                        delivery.message().id(), brokenRow.getMessage());
+            } else {
                 reject(channel, delivery.deliveryTag());
             }
+        }
+    }
+
+    /**
+     * Schreibt eine einzelne Nachricht und sagt, ob es geklappt hat. Bewusst getrennt vom Bestaetigen:
+     * scheitert nur das Bestaetigen (die Verbindung ist weg), ist das kein Fehler der Nachricht und
+     * darf nicht als solcher gemeldet oder abgelehnt werden.
+     */
+    private boolean tryToWriteOne(Delivery delivery) throws InterruptedException {
+        try {
+            writePatiently(List.of(delivery.message()));
+            return true;
+        } catch (BadDataException brokenRow) {
+            log.warn("Nachricht {} wird von der Datenbank abgelehnt und geht nach chat.dlq: {}",
+                    delivery.message().id(), brokenRow.getMessage());
+            return false;
+        } catch (RuntimeException bug) {
+            log.error("Nachricht {} loest einen unerwarteten Fehler aus und geht nach chat.dlq",
+                    delivery.message().id(), bug);
+            return false;
         }
     }
 
@@ -184,19 +214,34 @@ public class PersistListener {
     }
 
     /**
-     * Gibt alles zurueck, was in diesem Paket noch offen ist. Ein einziges basicNack mit der hoechsten
-     * Nummer und multiple = true genuegt: es betrifft nur noch unbestaetigte Nachrichten bis zu dieser
-     * Nummer, bereits Bestaetigtes oder Abgelehntes bleibt unberuehrt. requeue = true stellt sie
-     * wieder in die Queue.
+     * Lehnt alles ab, was in diesem Paket noch offen ist, ohne Wiedereinreihen. Ein einziges basicNack
+     * mit der hoechsten Nummer und multiple = true genuegt: es betrifft nur noch unbestaetigte
+     * Nachrichten bis zu dieser Nummer, bereits Bestaetigtes oder Abgelehntes bleibt unberuehrt.
+     */
+    private void rejectOpenMessages(List<Message> rawMessages, Channel channel) throws IOException {
+        long highestDeliveryTag = highestDeliveryTag(rawMessages);
+        channel.basicNack(highestDeliveryTag, true, false);
+    }
+
+    /**
+     * Gibt alles zurueck, was in diesem Paket noch offen ist. Nur beim Beenden des Dienstes: dann
+     * haengt kein Fehler an den Nachrichten, sie sollen einfach spaeter wieder ankommen.
+     * requeue = true stellt sie wieder in die Queue.
      */
     private void returnBatchToQueue(List<Message> rawMessages, Channel channel) throws IOException {
-        long highestDeliveryTag = 0;
+        long highestDeliveryTag = highestDeliveryTag(rawMessages);
+        channel.basicNack(highestDeliveryTag, true, true);
+    }
+
+    /** Sucht die hoechste Lieferungsnummer im Paket. Sie steht fuer "alle bis hierher" bei multiple = true. */
+    private long highestDeliveryTag(List<Message> rawMessages) {
+        long highest = 0;
         for (Message rawMessage : rawMessages) {
             long deliveryTag = rawMessage.getMessageProperties().getDeliveryTag();
-            if (deliveryTag > highestDeliveryTag) {
-                highestDeliveryTag = deliveryTag;
+            if (deliveryTag > highest) {
+                highest = deliveryTag;
             }
         }
-        channel.basicNack(highestDeliveryTag, true, true);
+        return highest;
     }
 }
