@@ -4,16 +4,15 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <!-- Der Spring-Boot-Eltern-POM legt die Versionen aller Spring-Bibliotheken fest.
-         Deshalb steht bei den meisten Abhaengigkeiten unten keine Versionsnummer. -->
+    <!-- Der Eltern-POM im Wurzelverzeichnis erbt vom Spring-Boot-Eltern und legt damit
+         die Versionen aller Spring-Bibliotheken fest. -->
     <parent>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.5.16</version>
-        <relativePath/>
+        <groupId>ch.benedict.m321</groupId>
+        <artifactId>m321-chat-app</artifactId>
+        <version>0.1.0</version>
+        <relativePath>../pom.xml</relativePath>
     </parent>
 
-    <groupId>ch.benedict.m321</groupId>
     <artifactId>chat-service</artifactId>
     <version>0.1.0</version>
     <name>chat-service</name>
