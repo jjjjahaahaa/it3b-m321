@@ -16,10 +16,12 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.UUID;
 import java.util.Base64;
+import java.util.List;
 import java.util.concurrent.TimeoutException;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rabbitmq.client.AMQP;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.ConnectionFactory;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -169,6 +171,21 @@ public final class TestInfrastructure {
         }
     }
 
+    /**
+     * Traegt Datenbank und Broker der Testcontainer in eine Spring-Anwendung ein. Wird von
+     * jedem Test aufgerufen, der die ganze Anwendung startet. Die Anwendung liest dieselben
+     * Einstellungen sonst aus Umgebungsvariablen.
+     */
+    public static void registerWith(org.springframework.test.context.DynamicPropertyRegistry registry) {
+        registry.add("spring.datasource.url", TestInfrastructure::jdbcUrl);
+        registry.add("spring.datasource.username", TestInfrastructure::databaseUser);
+        registry.add("spring.datasource.password", TestInfrastructure::databasePassword);
+        registry.add("spring.rabbitmq.host", TestInfrastructure::brokerHost);
+        registry.add("spring.rabbitmq.port", TestInfrastructure::brokerPort);
+        registry.add("spring.rabbitmq.username", TestInfrastructure::brokerUser);
+        registry.add("spring.rabbitmq.password", TestInfrastructure::brokerPassword);
+    }
+
     /** Adresse des Test-Brokers vom Testrechner aus (Docker vergibt den Port zufaellig). */
     public static String brokerHost() {
         return RABBIT.getHost();
@@ -195,16 +212,77 @@ public final class TestInfrastructure {
      * Management-API dagegen rechnet ihre Zahlen nur alle paar Sekunden neu.
      */
     public static int countMessages(String queueName) throws IOException, TimeoutException {
+        try (com.rabbitmq.client.Connection brokerConnection = newBrokerConnection();
+             Channel channel = brokerConnection.createChannel()) {
+            return channel.queueDeclarePassive(queueName).getMessageCount();
+        }
+    }
+
+    /**
+     * Wartet bis zu der angegebenen Zeit, bis eine Abfrage genau die erwartete Zahl liefert. Es wird
+     * alle 100 Millisekunden nachgefragt, nie mit einem festen Schlaf gewartet: der Test ist so
+     * schnell wie das System und trotzdem nicht zu ungeduldig. Ist die Zeit um, gibt die Methode den
+     * zuletzt gelesenen Wert zurueck, und der Test zeigt dann die echte Abweichung.
+     */
+    public static long waitUntilNumberIs(String sql, long expected, int timeoutSeconds) throws SQLException, InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutSeconds * 1000L;
+        long lastValue = queryNumber(sql);
+        while (lastValue != expected && System.currentTimeMillis() < deadline) {
+            Thread.sleep(100);
+            lastValue = queryNumber(sql);
+        }
+        return lastValue;
+    }
+
+    /**
+     * Wartet, bis in der Queue weder wartende noch unbestaetigte Nachrichten sind. Dafuer nimmt sie die
+     * Management-API (Feld "messages"), denn nur die zaehlt auch unbestaetigte mit. Sie rechnet ihre
+     * Zahlen alle paar Sekunden neu, deshalb ist die Frist grosszuegig. Gibt die zuletzt gelesene Zahl zurueck.
+     */
+    public static int waitUntilQueueIsEmpty(String queueName, int timeoutSeconds) throws IOException, InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutSeconds * 1000L;
+        int lastValue = askBroker("queues/%2F/" + queueName).path("messages").asInt(-1);
+        while (lastValue != 0 && System.currentTimeMillis() < deadline) {
+            Thread.sleep(500);
+            lastValue = askBroker("queues/%2F/" + queueName).path("messages").asInt(-1);
+        }
+        return lastValue;
+    }
+
+    /** Leert eine Queue. Tests, die die Dead-Letter-Queue zaehlen, starten damit von null. */
+    public static void purgeQueue(String queueName) throws IOException, TimeoutException {
+        try (com.rabbitmq.client.Connection brokerConnection = newBrokerConnection();
+             Channel channel = brokerConnection.createChannel()) {
+            channel.queuePurge(queueName);
+        }
+    }
+
+    /**
+     * Legt Nachrichtenkoerper in eine Queue, so wie es ein Skript von Hand taete: nur mit dem
+     * Header content_type = application/json, ohne __TypeId__. Ueber den Standard-Exchange ("")
+     * kommt eine Nachricht direkt in die Queue, deren Name der Routing-Key ist.
+     */
+    public static void publishJson(String exchange, String routingKey, List<String> bodies) throws IOException, TimeoutException {
+        AMQP.BasicProperties onlyContentType = new AMQP.BasicProperties.Builder()
+                .contentType("application/json")
+                .build();
+
+        try (com.rabbitmq.client.Connection brokerConnection = newBrokerConnection();
+             Channel channel = brokerConnection.createChannel()) {
+            for (String body : bodies) {
+                channel.basicPublish(exchange, routingKey, onlyContentType, body.getBytes(StandardCharsets.UTF_8));
+            }
+        }
+    }
+
+    /** Oeffnet eine Verbindung zum Test-Broker. Der Aufrufer schliesst sie wieder. */
+    private static com.rabbitmq.client.Connection newBrokerConnection() throws IOException, TimeoutException {
         ConnectionFactory factory = new ConnectionFactory();
         factory.setHost(RABBIT.getHost());
         factory.setPort(RABBIT.getAmqpPort());
         factory.setUsername(BROKER_USER);
         factory.setPassword(BROKER_PASSWORD);
-
-        try (com.rabbitmq.client.Connection brokerConnection = factory.newConnection();
-             Channel channel = brokerConnection.createChannel()) {
-            return channel.queueDeclarePassive(queueName).getMessageCount();
-        }
+        return factory.newConnection();
     }
 
     /**

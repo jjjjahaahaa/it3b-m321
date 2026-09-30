@@ -1,0 +1,44 @@
+# Alle Einstellungen des batch-writer. Jeder Wert mit ${NAME} kommt aus einer Umgebungsvariablen,
+# ${NAME:standard} heisst: gibt es die Variable nicht, gilt der Wert nach dem Doppelpunkt.
+# Eine Variable ganz ohne Standard ist Pflicht (Beschreibung: docs/spec-batch-writer.md, 4.4).
+
+spring:
+  application:
+    name: batch-writer
+
+  main:
+    # Der Dienst ist nur Konsument. Es soll kein Webserver starten und kein Port aufgehen.
+    web-application-type: none
+
+  datasource:
+    # reWriteBatchedInserts: der Treiber macht aus 500 Einzel-INSERTs EINEN mehrzeiligen INSERT.
+    # connectTimeout / socketTimeout (Sekunden): ist die Datenbank weg, soll der Dienst nach kurzer
+    # Zeit einen Fehler sehen und neu versuchen, statt ewig auf eine Antwort zu warten.
+    url: jdbc:postgresql://${POSTGRES_HOST:postgres}:${POSTGRES_PORT:5432}/${POSTGRES_DB}?reWriteBatchedInserts=true&connectTimeout=5&socketTimeout=30
+    username: ${POSTGRES_USER}
+    password: ${POSTGRES_PASSWORD}
+    hikari:
+      # Es gibt genau einen Konsumenten-Thread, er braucht eine Verbindung. Die zweite ist Reserve.
+      maximum-pool-size: 2
+      # So lange wartet der Pool auf eine Verbindung (Millisekunden), bevor er einen Fehler meldet.
+      connection-timeout: 5000
+
+  rabbitmq:
+    host: ${RABBITMQ_HOST:rabbitmq}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_DEFAULT_USER}
+    password: ${RABBITMQ_DEFAULT_PASS}
+
+# Eigene Einstellungen des Dienstes
+batch:
+  # Hoechstzahl Nachrichten pro Paket. Zugleich der Prefetch: RabbitMQ liefert nie mehr
+  # unbestaetigte Nachrichten aus, als in ein Paket passen.
+  size: ${BATCH_SIZE:500}
+  # Zeitlimit pro Paket in Millisekunden.
+  timeout-ms: ${BATCH_TIMEOUT_MS:200}
+  # Pause zwischen zwei Versuchen, wenn die Datenbank nicht antwortet (Millisekunden).
+  db-retry-pause-ms: ${DB_RETRY_PAUSE_MS:2000}
+
+logging:
+  level:
+    ch.benedict.m321: DEBUG
