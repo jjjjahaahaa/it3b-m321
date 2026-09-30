@@ -19,6 +19,7 @@ oben genannten Pfad.)
 | Tests | echte PostgreSQL und echtes RabbitMQ in Containern (Testcontainers), keine Attrappen |
 | Voraussetzung | Docker läuft. Ohne Docker schlagen die Tests des `batch-writer` mit klarer Meldung fehl |
 | Zeiten warten | Tests warten mit einer eigenen Schleife bis zu einer Obergrenze, nie mit einem festen `sleep` |
+| Testisolation | Alle Tests, die die Anwendung starten, erben von `IntegrationTest`. Diese schliesst den Spring-Kontext nach der Klasse. Sonst blieben alte Kontexte im Zwischenspeicher am Leben, und ihre Listener stünden als Konkurrenten an `chat.persist` |
 
 ## Zielbild der Dateien
 
@@ -159,15 +160,32 @@ kaputten in `chat.dlq` · `chat.persist` am Ende leer.
 
 **Commit:** `feat(batch-writer): kaputte Nachrichten in chat.dlq, Rest des Pakets bleibt erhalten`
 
-## Aufgabe 8 — Unerwartete Fehler eingrenzen statt zurückgeben (F8)
+## Aufgabe 8 — Datenbank fällt aus (F2, S7)
 
-*Diese Aufgabe kam nachträglich dazu.* Beim Bau von Aufgabe 8 (jetzt 9) zeigte eine Messung am Broker,
+**Warum jetzt:** Der schwierigste Fall, er braucht die Unterscheidung «Zeile kaputt» / «Datenbank weg»
+aus Aufgabe 7: er darf weder Nachrichten verlieren (nicht ablehnen) noch den Dienst beenden. Und er
+muss stehen, bevor Aufgabe 9 die letzte Auffangstelle auf «ablehnen» umstellt, sonst landeten bei einem
+Ausfall gute Nachrichten in der Dead-Letter-Queue.
+
+- Warteschleife mit `DB_RETRY_PAUSE_MS`, unterbrechbar beim Beenden.
+
+**Test:** `DatabaseOutageTest` — Datenbank verweigert alle Verbindungen (`ALLOW_CONNECTIONS false`,
+bestehende Verbindungen getrennt), 300 Nachrichten gesendet, 12 s Ausfall bei 4 s Wartepause →
+**höchstens 6 Schreibversuche** (eine Endlosschleife käme auf über 10), danach Datenbank wieder frei →
+alle 300 in der Tabelle, `chat.dlq` leer, der Listener wurde nicht neu gestartet.
+
+**Commit:** `feat(batch-writer): bei Datenbankausfall warten und wiederholen statt ablehnen`
+
+## Aufgabe 9 — Unerwartete Fehler eingrenzen statt zurückgeben (F8)
+
+*Diese Aufgabe kam nachträglich dazu.* Beim Bau der Datenbank-Warteschleife zeigte eine Messung am Broker,
 dass `nack` mit `requeue` das Zustelllimit nicht verbraucht (Spezifikation F2, F8). Der Listener aus
 Aufgabe 5, der ein Paket nach einem Fehler zurück in die Queue gab, konnte sich so endlos im Kreis
 drehen. Dieser Schritt ersetzt das durch Eingrenzen und Ablehnen.
 
-**Warum jetzt:** Er baut auf dem Einzelweg aus Aufgabe 7 auf und muss vor dem Datenbankausfall stehen,
-weil der Warteschleife sonst der Rückhalt fehlt: alles, was nicht «Datenbank weg» ist, muss sicher enden.
+**Warum jetzt:** Er baut auf dem Einzelweg aus Aufgabe 7 auf. Und erst seit Aufgabe 8 ist «Datenbank
+weg» sicher abgefangen. Jetzt darf die letzte Auffangstelle ablehnen statt zurückgeben, ohne dass ein
+Ausfall gute Nachrichten in die Dead-Letter-Queue schickt.
 
 - Jede Ausnahme bei einer einzelnen Nachricht (Umwandeln, Schreiben) → diese Nachricht nach `chat.dlq`.
 - Ein Fehler beim Schreiben des Pakets, der nicht «Datenbank weg» ist → Einzelweg.
@@ -178,20 +196,6 @@ Programmfehler (`@MockitoSpyBean`). Paket mit 5 guten, der Fehlernachricht und 5
 1 in `chat.dlq`, `chat.persist` leer, Listener läuft weiter.
 
 **Commit:** `fix(batch-writer): unerwartete Fehler auf die Nachricht eingrenzen, nie zurueck in die Queue`
-
-## Aufgabe 9 — Datenbank fällt aus (F2, S7)
-
-**Warum jetzt:** Der schwierigste Fall, er braucht alles Vorherige: er darf weder Nachrichten
-verlieren (nicht ablehnen) noch den Dienst beenden. Erst wenn die Unterscheidung «Zeile kaputt» /
-«Datenbank weg» (Aufgaben 7 und 8) steht, lässt sie sich sauber durchziehen.
-
-- Warteschleife mit `DB_RETRY_PAUSE_MS`, unterbrechbar beim Beenden.
-
-**Test:** `DatabaseOutageTest` — Datenbank verweigert alle Verbindungen (`ALLOW_CONNECTIONS false`,
-bestehende Verbindungen getrennt), 300 Nachrichten gesendet, Wartezeit, Datenbank wieder frei →
-alle 300 in der Tabelle, `chat.dlq` leer, der Listener wurde nicht neu gestartet.
-
-**Commit:** `feat(batch-writer): bei Datenbankausfall warten und wiederholen statt ablehnen`
 
 ## Aufgabe 10 — Stack: Dockerfiles, Compose, `.env.example`, keine Ports
 
