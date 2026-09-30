@@ -38,7 +38,14 @@ public class RabbitConfiguration {
         // Prefetch = Paketgroesse. Liesse RabbitMQ weniger unbestaetigte Nachrichten zu, koennte ein
         // Paket nie voll werden und liefe jedes Mal ins Zeitlimit.
         factory.setPrefetchCount(batchSize);
+
+        // Zwei verschiedene Zeitlimits, beide auf denselben Wert:
+        // receiveTimeout    = so lange wartet der Container auf die NAECHSTE Nachricht.
+        // batchReceiveTimeout = so lange darf das GANZE Paket sammeln, gemessen ab der ersten Nachricht.
+        // Nur das erste allein waere ein Fehler: kaeme alle 150 ms eine Nachricht, wuerde es nie
+        // ausloesen, und das Paket fuellte sich erst bei 500 Stueck (siehe BatchingTest).
         factory.setReceiveTimeout(batchTimeoutMillis);
+        factory.setBatchReceiveTimeout(batchTimeoutMillis);
 
         // Wir bestaetigen selbst, und zwar erst NACH dem Commit der Datenbank.
         factory.setAcknowledgeMode(AcknowledgeMode.MANUAL);
