@@ -14,3 +14,6 @@ out/
 
 # Zugangsdaten - nur .env.example gehoert ins Repository
 .env
+
+# Eigene Anpassungen fuer den Rechner, zum Beispiel veroeffentlichte Ports zum Ausprobieren
+docker-compose.override.yml

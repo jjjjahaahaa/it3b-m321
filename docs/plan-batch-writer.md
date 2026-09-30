@@ -248,4 +248,49 @@ ohne veröffentlichte Ports), Messwerte in diesem Plan.
 
 ## Messwerte
 
-*(wird in Aufgabe 12 mit den gemessenen Zahlen aus `scripts/abnahme.sh` gefüllt)*
+Gemessen am 30.09.2026 auf dem Stack aus `.env.example` mit `scripts/abnahme.sh` (S2 bis S8) und
+`mvn clean test` (S1). Der Stack lief in einer Docker-Umgebung ohne feste Ports.
+
+| Nr | Szenario | Gemessen | Erwartet | |
+|---|---|---|---|---|
+| S1 | `mvn clean test` im Wurzelverzeichnis | 37 Tests (4 `chat-service`, 33 `batch-writer`), 0 Fehler, 61 s | ein Lauf, alles grün | ✓ |
+| S2 | frischer Stack aus `.env.example` | 4 Dienste laufen, 0 veröffentlichte Ports | alle laufen, kein Port | ✓ |
+| S3 | 1000 Nachrichten über `POST` | alle 1000 nach 17 s (Senden 15 s), `chat.persist` = 0 | ≤ 60 s, Queue leer | ✓ |
+| S4 | Schreiber gestoppt, 1000 gesendet, gestartet | genau 1000 neu, **12** Transaktionen (gezählt mit `xact_commit`, inklusive der Messabfragen selbst; der Test `BatchingTest` zählt die schreibenden Transaktionen allein: **2**) | ≤ 100 | ✓ |
+| S5 | dieselbe Nachricht zweimal, nur `content_type` | 1 Zeile, `chat.dlq` unverändert | 1 Zeile, DLQ leer | ✓ |
+| S6 | `--scale batch-writer=2`, 1000 Nachrichten | 2 Konsumenten, 1000 neu, 3000 Zeilen = 3000 verschiedene IDs | beide an der Queue, keine doppelt | ✓ |
+| S7 | Postgres 15 s aus, 300 Nachrichten | alle 300 nach 7 s, **kein** Neustart des Schreibers | ≤ 90 s, ohne Neustart | ✓ |
+| S8 | Quelltext | 0 Stream-Treffer, `.env` nicht im Repo, `CommentRulesTest` grün | Regeln aus `CLAUDE.md` | ✓ |
+
+Zusätzlich von Hand am laufenden Stack geprüft, weil sie in der Spezifikation stehen:
+
+| Fall | Ergebnis |
+|---|---|
+| F7 — Broker startet neu, Schreiber läuft | beide Konsumenten hängen danach wieder an der Queue, 100 von 100 Nachrichten angekommen |
+| Broker startet neu, während 200 Nachrichten in der Queue liegen | Queue-Inhalt bleibt erhalten (Quorum-Queue + Volume), 200 von 200 angekommen |
+| F10 — Dienst wird beendet, während er auf die Datenbank wartet | Stopp nach 7 s (Exit-Code 143), 50 von 50 angekommen, `chat.dlq` leer |
+
+Und die Messungen, die eine Annahme der Planung widerlegt oder bestätigt haben:
+
+| Frage | Messung |
+|---|---|
+| Reicht `setReceiveTimeout(200)` für «500 oder 200 ms»? | **Nein.** Bei einer Nachricht alle 50 ms waren nach 2 s noch 0 von 65 geschrieben. Mit `setBatchReceiveTimeout` sind es 32 von 64 |
+| Schreibt `reWriteBatchedInserts` ein Paket wirklich als einen `INSERT`? | **Ja**, auch mit `ON CONFLICT`. Im Statement-Log: 4 Zeilen → ein `INSERT … VALUES (…),(…),(…),(…)` und ein `COMMIT`. Ohne die Option 4 einzelne Statements |
+| Verbraucht `nack` mit `requeue` das `x-delivery-limit`? | **Nein.** 29 Zustellungen derselben Nachricht, nichts in `chat.dlq`. Ein Kanal, der ohne ACK schliesst, verbraucht es: nach 3 Zustellungen liegt die Nachricht in `chat.dlq` |
+| Legt der Broker den Benutzer aus `RABBITMQ_DEFAULT_USER` an, wenn er beim Start Definitionen lädt? | **Nein** («Will not seed default virtual host and user»). Deshalb der Import nach dem Start |
+| Wie viele Schreibversuche macht der Dienst in 12 s Datenbankausfall? | Mit Warteschleife (4 s Pause) höchstens 6. Ohne (Paket sofort wieder einreihen) 10 |
+
+## Abweichungen vom ersten Plan
+
+Der Plan wurde beim Bauen an drei Stellen geändert. Jede Änderung steht als eigener `docs:`-Commit im
+`git log`, vor dem Code, der sie umsetzt:
+
+1. **Definitionen nach dem Start einspielen** statt `load_definitions` (Aufgabe 2, Commit
+   «Definitionen nach dem Broker-Start einspielen»).
+2. **Neue Aufgabe 9** (unerwartete Fehler eingrenzen), und Reihenfolge der Aufgaben 8 und 9 getauscht,
+   nachdem gemessen war, dass `nack` mit `requeue` das Zustelllimit nicht verbraucht.
+3. **Kommentarregeln (Aufgabe 11) vor das Abnahmeskript (Aufgabe 12)**, weil das Skript den Regeltest
+   aufruft.
+
+Dazu kam ein Test-Commit ohne eigene Aufgabe: `IntegrationTest` als gemeinsame Basisklasse, damit nur ein
+Listener an `chat.persist` liest (Vorgabe «Testisolation» oben).

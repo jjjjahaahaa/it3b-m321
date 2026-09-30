@@ -333,7 +333,7 @@ Gespeichert wird nur der Benutzername als Absender.
    Queue-Länge und Schreibdauer gegeneinander auftragen.
 4. **Einzelweg nach einem fehlgeschlagenen Paket** (Abschnitt 2.4). Schlägt ein Paket fehl,
    soll der `batch-service` es einmalig Zeile für Zeile schreiben, damit nur die tatsächlich
-   kaputte Nachricht in der DLQ landet. Noch nicht gebaut.
+   kaputte Nachricht in der DLQ landet. Gebaut im `batch-writer` (siehe Nachtrag ganz unten).
 5. **Existiert der eingeladene Benutzername überhaupt?** Beim Einladen prüfen wir vorerst
    **nicht** gegen Keycloak. Ein Tippfehler legt dann eine Mitgliedschaft für jemanden an, den
    es nicht gibt — harmlos, aber unschön. Später über die Keycloak-Admin-API prüfbar.
@@ -514,3 +514,18 @@ Java, Spring und SQL bringen ihr eigenes englisches Vokabular mit (`get`, `find`
 Bezeichner folgen also der Sprache der Werkzeuge, die Erklärung folgt der Sprache des Unterrichts.
 Das Datenmodell oben ist entsprechend umbenannt (`room`, `room_member`, `sender`, `sent_at`), die
 Raum-Endpunkte heissen `/api/rooms`.
+
+### Nachtrag — batch-writer gebaut (Bewertung 1)
+
+Der Schreibweg ist als Dienst `batch-writer` umgesetzt. Spezifikation: `docs/spec-batch-writer.md`, Plan
+mit Messwerten: `docs/plan-batch-writer.md`. Wo die Umsetzung von dieser Planung abweicht:
+
+| Planung | Umsetzung | Grund |
+|---|---|---|
+| Dienst heisst `batch-service`, läuft genau einmal | heisst `batch-writer`, mehrere Instanzen sind möglich | Der Auftrag verlangt `--scale batch-writer=2`. Es braucht keine Absprache, weil die ID vom `chat-service` kommt und der Primärschlüssel Wiederholungen verwirft |
+| Dead-Letter-Queue `chat.persist.dlq` | `chat.dlq` | So nennt sie der Auftrag |
+| `setReceiveTimeout(200)` ergibt «500 oder 200 ms» (Abschnitt 2.3) | zusätzlich `setBatchReceiveTimeout(200)` | `receiveTimeout` allein begrenzt nur die Pause zwischen zwei Nachrichten. Gemessen: bei einer Nachricht alle 50 ms wurde nach 2 s noch nichts geschrieben |
+| Giftnachricht: kein ACK, nach 3 Zustellungen in die DLQ (Abschnitt 2.4) | Der Listener lehnt kaputte Nachrichten selbst ab (`nack` ohne Wiedereinreihen). `x-delivery-limit` bleibt als Netz für Abstürze | In RabbitMQ 4 zählt ein `nack` mit `requeue` **nicht** gegen `x-delivery-limit`. Nur ein Kanal, der ohne ACK schliesst, zählt |
+| Einzelweg nach einem gescheiterten Paket (offener Punkt 4) | gebaut | Eine kaputte Nachricht reisst die 499 anderen nicht mit |
+| Queue-Einstellungen im Dienst | `rabbitmq/definitions.json`, vom Healthcheck des Brokers eingespielt | Sonst gäbe es beim Start ein Fenster, in dem der `chat-service` annimmt, aber die Queue noch fehlt. Ein Exchange ohne Queue verwirft still |
+| Ports von PostgreSQL und RabbitMQ veröffentlicht (Bootstrap) | kein Dienst veröffentlicht einen Port | Die Regel «kein Port nach aussen» gilt wieder |

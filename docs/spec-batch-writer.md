@@ -249,7 +249,9 @@ ON CONFLICT (id) DO NOTHING
 
 Mit `reWriteBatchedInserts=true` in der JDBC-URL schreibt der PostgreSQL-Treiber die 500
 Parametersätze zu **einem** mehrzeiligen `INSERT` um. Ohne diese Option ginge jede Zeile einzeln über
-die Leitung.
+die Leitung. Geprüft im Statement-Log der Datenbank (`log_statement=all`): 4 Zeilen ergeben ein
+`INSERT … VALUES (…),(…),(…),(…) ON CONFLICT (id) DO NOTHING` und ein `COMMIT`, ohne die Option sind es
+vier einzelne `INSERT` und ein `COMMIT`.
 
 ### 4.2 Wo das Schema entsteht
 
@@ -353,6 +355,9 @@ Jedes Kriterium ist ein Befehl und ein erwarteter Wert. Grundlage ist ein frisch
 | S8b | Kommentar über jeder Klasse und Methode | Sichtprüfung, ergänzt durch den Test `CommentRulesTest` | Test grün |
 | S8c | `.env` nicht im Repo | `git ls-files .env` | leere Ausgabe |
 
-Die Tests unter `batch-writer/src/test/` decken S5 (Duplikat), S7 (Datenbankausfall), F3, F4 und das
-Zeitlimit mit **echtem RabbitMQ und echter PostgreSQL** ab (Testcontainers). Sie laufen in
-`mvn clean test` mit, ein Stack muss dafür nicht laufen. Docker muss laufen.
+Die Tests unter `batch-writer/src/test/` decken S4 (Bündeln), S5 (Duplikat), S7 (Datenbankausfall),
+F3, F4, F8 und das Zeitlimit mit **echtem RabbitMQ und echter PostgreSQL** ab (Testcontainers). Sie
+laufen in `mvn clean test` mit, ein Stack muss dafür nicht laufen. Docker muss laufen.
+
+`scripts/abnahme.sh` führt S2 bis S8 aus und schreibt zu jedem den gemessenen neben den erwarteten Wert.
+Die Messwerte stehen am Ende des [Umsetzungsplans](plan-batch-writer.md).
