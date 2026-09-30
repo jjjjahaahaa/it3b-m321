@@ -213,25 +213,27 @@ der Tabelle.
 
 **Commit:** `feat(infra): batch-writer und chat-service im Compose-Stack, keine Ports nach aussen`
 
-## Aufgabe 11 — Abnahmeskript für S2 bis S8
-
-**Warum jetzt:** Die Szenarien der Spezifikation (Abschnitt 5) werden ausführbar. Erst am fertigen
-Stack lassen sie sich ehrlich messen. Das Skript ersetzt «bei mir geht es» durch eine Tabelle.
-
-**Test:** `scripts/abnahme.sh` auf einem frischen Stack → S2 bis S8 alle `OK`. Die Messwerte kommen in
-den Abschnitt «Messwerte» unten.
-
-**Commit:** `test: Abnahmeskript fuer die Szenarien S2 bis S8`
-
-## Aufgabe 12 — Kommentarregeln als Test (S8)
+## Aufgabe 11 — Kommentarregeln als Test (S8)
 
 **Warum jetzt:** Sobald der Code steht, lässt sich die Regel «Kommentar über jeder Klasse und
-Methode» prüfen und nachziehen. Vorher würde der Test bei jedem Zwischenstand fehlschlagen.
+Methode» prüfen und nachziehen. Vorher würde der Test bei jedem Zwischenstand fehlschlagen. Er steht
+vor dem Abnahmeskript, weil dessen S8 ihn aufruft.
 
 **Test:** `CommentRulesTest` — durchsucht `batch-writer/src`, meldet jede Klasse und Methode ohne
 Kommentar davor sowie jedes `stream()`. Erst rot (fehlende Kommentare), dann grün.
 
 **Commit:** `test(batch-writer): Kommentarregeln und Stream-Verbot automatisch pruefen`
+
+## Aufgabe 12 — Abnahmeskript für S2 bis S8
+
+**Warum jetzt:** Die Szenarien der Spezifikation (Abschnitt 5) werden ausführbar. Erst am fertigen
+Stack lassen sie sich ehrlich messen, und S8 im Skript ruft den Regeltest aus Aufgabe 11 auf. Das Skript
+ersetzt «bei mir geht es» durch eine Tabelle.
+
+**Test:** `scripts/abnahme.sh` auf einem frischen Stack → S2 bis S8 alle `OK`. Die Messwerte kommen in
+den Abschnitt «Messwerte» unten.
+
+**Commit:** `test: Abnahmeskript fuer die Szenarien S2 bis S8`
 
 ## Aufgabe 13 — Doku nachführen
 
