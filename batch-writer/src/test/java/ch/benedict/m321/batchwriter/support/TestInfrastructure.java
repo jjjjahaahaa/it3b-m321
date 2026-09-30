@@ -1,0 +1,201 @@
+package ch.benedict.m321.batchwriter.support;
+
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+import java.util.Base64;
+import java.util.concurrent.TimeoutException;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rabbitmq.client.Channel;
+import com.rabbitmq.client.ConnectionFactory;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.containers.RabbitMQContainer;
+import org.testcontainers.utility.MountableFile;
+
+/**
+ * Startet fuer alle Tests zusammen EINE echte PostgreSQL und EIN echtes RabbitMQ in Docker.
+ * Beide werden mit denselben Dateien eingerichtet wie im Compose-Stack: die Datenbank mit
+ * db/01-schema.sql, der Broker mit rabbitmq/definitions.json. So testen wir nicht gegen eine
+ * Nachbildung, sondern gegen dasselbe, was spaeter produktiv laeuft.
+ *
+ * Die Container starten beim ersten Zugriff auf diese Klasse und werden erst beendet, wenn die
+ * Test-JVM endet. Das spart pro Testklasse mehrere Sekunden Startzeit.
+ */
+public final class TestInfrastructure {
+
+    private static final String DATABASE_NAME = "chat";
+    private static final String DATABASE_USER = "chat";
+    private static final String DATABASE_PASSWORD = "chat";
+
+    /** Standardbenutzer des Test-Brokers. Der Broker im Compose-Stack nutzt andere Werte aus .env. */
+    private static final String BROKER_USER = "guest";
+    private static final String BROKER_PASSWORD = "guest";
+
+    private static final PostgreSQLContainer<?> POSTGRES;
+    private static final RabbitMQContainer RABBIT;
+
+    private static final ObjectMapper JSON = new ObjectMapper();
+
+    static {
+        // Das Schema aus dem Repository wird beim ersten Start automatisch ausgefuehrt,
+        // genau wie im Compose-Stack ueber das Verzeichnis docker-entrypoint-initdb.d.
+        Path schemaFile = findInRepository("db/01-schema.sql");
+        POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine")
+                .withDatabaseName(DATABASE_NAME)
+                .withUsername(DATABASE_USER)
+                .withPassword(DATABASE_PASSWORD)
+                .withCopyFileToContainer(
+                        MountableFile.forHostPath(schemaFile),
+                        "/docker-entrypoint-initdb.d/01-schema.sql");
+        POSTGRES.start();
+
+        // Der Broker bekommt dieselbe definitions.json wie im Compose-Stack. Sie wird erst
+        // nach dem Start eingespielt, weil der Broker sonst den Standardbenutzer nicht anlegt.
+        Path definitionsFile = findInRepository("rabbitmq/definitions.json");
+        RABBIT = new RabbitMQContainer("rabbitmq:4-management-alpine")
+                .withCopyFileToContainer(
+                        MountableFile.forHostPath(definitionsFile),
+                        "/definitions.json");
+        RABBIT.start();
+        importDefinitions();
+    }
+
+    /**
+     * Spielt rabbitmq/definitions.json in den laufenden Broker ein, mit demselben Befehl wie
+     * der Healthcheck im Compose-Stack. Der Import laeuft im Broker asynchron. Deshalb wartet
+     * diese Methode danach, bis die Queue chat.persist wirklich sichtbar ist.
+     */
+    private static void importDefinitions() {
+        try {
+            RABBIT.execInContainer("rabbitmqctl", "import_definitions", "/definitions.json");
+            waitUntilQueueExists("chat.persist");
+        } catch (IOException | InterruptedException exception) {
+            throw new IllegalStateException("Definitionen konnten nicht eingespielt werden", exception);
+        }
+    }
+
+    /** Fragt den Broker bis zu 30 Sekunden lang alle halbe Sekunde, ob die Queue schon existiert. */
+    private static void waitUntilQueueExists(String queueName) throws InterruptedException {
+        for (int attempt = 0; attempt < 60; attempt++) {
+            try {
+                askBroker("queues/%2F/" + queueName);
+                return;
+            } catch (IOException notThereYet) {
+                Thread.sleep(500);
+            }
+        }
+        throw new IllegalStateException("Queue " + queueName + " ist nach 30 Sekunden nicht da");
+    }
+
+    private TestInfrastructure() {
+        // Nur statische Hilfsmethoden, es gibt nichts zu erzeugen.
+    }
+
+    /**
+     * Sucht eine Datei des Repositories, egal ob der Test aus dem Modulverzeichnis (Maven)
+     * oder aus dem Wurzelverzeichnis (IDE) gestartet wurde. Dazu geht sie vom aktuellen
+     * Verzeichnis so lange nach oben, bis die Datei dort liegt.
+     */
+    private static Path findInRepository(String relativePath) {
+        Path directory = Path.of(System.getProperty("user.dir")).toAbsolutePath();
+        while (directory != null) {
+            Path candidate = directory.resolve(relativePath);
+            if (Files.exists(candidate)) {
+                return candidate;
+            }
+            directory = directory.getParent();
+        }
+        throw new IllegalStateException("Datei nicht gefunden: " + relativePath);
+    }
+
+    /** JDBC-Adresse der Test-Datenbank, mit denselben Optionen wie im Betrieb. */
+    public static String jdbcUrl() {
+        return POSTGRES.getJdbcUrl() + "&reWriteBatchedInserts=true";
+    }
+
+    /** Benutzername der Test-Datenbank. */
+    public static String databaseUser() {
+        return DATABASE_USER;
+    }
+
+    /** Passwort der Test-Datenbank. */
+    public static String databasePassword() {
+        return DATABASE_PASSWORD;
+    }
+
+    /** Oeffnet eine neue, eigene Verbindung zur Test-Datenbank fuer Pruefungen im Test. */
+    public static Connection openDatabaseConnection() throws SQLException {
+        return DriverManager.getConnection(jdbcUrl(), DATABASE_USER, DATABASE_PASSWORD);
+    }
+
+    /** Adresse des Test-Brokers vom Testrechner aus (Docker vergibt den Port zufaellig). */
+    public static String brokerHost() {
+        return RABBIT.getHost();
+    }
+
+    /** AMQP-Port des Test-Brokers auf dem Testrechner. */
+    public static int brokerPort() {
+        return RABBIT.getAmqpPort();
+    }
+
+    /** Benutzername des Test-Brokers. */
+    public static String brokerUser() {
+        return BROKER_USER;
+    }
+
+    /** Passwort des Test-Brokers. */
+    public static String brokerPassword() {
+        return BROKER_PASSWORD;
+    }
+
+    /**
+     * Zaehlt, wie viele Nachrichten gerade bereit in einer Queue liegen. Dazu deklariert sie die
+     * Queue "passiv" (nur nachfragen, nichts anlegen). Die Antwort ist immer aktuell. Die
+     * Management-API dagegen rechnet ihre Zahlen nur alle paar Sekunden neu.
+     */
+    public static int countMessages(String queueName) throws IOException, TimeoutException {
+        ConnectionFactory factory = new ConnectionFactory();
+        factory.setHost(RABBIT.getHost());
+        factory.setPort(RABBIT.getAmqpPort());
+        factory.setUsername(BROKER_USER);
+        factory.setPassword(BROKER_PASSWORD);
+
+        try (com.rabbitmq.client.Connection brokerConnection = factory.newConnection();
+             Channel channel = brokerConnection.createChannel()) {
+            return channel.queueDeclarePassive(queueName).getMessageCount();
+        }
+    }
+
+    /**
+     * Fragt die Management-API des Brokers und gibt die Antwort als JSON zurueck.
+     * Beispiel fuer den Pfad: "queues/%2F/chat.persist". So sehen wir im Test dieselben
+     * Zahlen wie in der Management-Oberflaeche.
+     */
+    public static JsonNode askBroker(String apiPath) throws IOException, InterruptedException {
+        String address = "http://" + RABBIT.getHost() + ":" + RABBIT.getHttpPort() + "/api/" + apiPath;
+        String login = BROKER_USER + ":" + BROKER_PASSWORD;
+        String encodedLogin = Base64.getEncoder().encodeToString(login.getBytes(StandardCharsets.UTF_8));
+
+        HttpRequest request = HttpRequest.newBuilder(URI.create(address))
+                .header("Authorization", "Basic " + encodedLogin)
+                .GET()
+                .build();
+        HttpResponse<String> response = HttpClient.newHttpClient()
+                .send(request, HttpResponse.BodyHandlers.ofString());
+
+        if (response.statusCode() != 200) {
+            throw new IOException("Broker antwortet mit " + response.statusCode() + " auf " + address);
+        }
+        return JSON.readTree(response.body());
+    }
+}

@@ -25,6 +25,7 @@
     <!-- Die Dienste bleiben einzeln baubar und startbar. Jeder hat sein eigenes Verzeichnis. -->
     <modules>
         <module>chat-service</module>
+        <module>batch-writer</module>
     </modules>
 
     <properties>

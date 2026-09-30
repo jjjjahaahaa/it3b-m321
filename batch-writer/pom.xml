@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- Der Eltern-POM im Wurzelverzeichnis legt die Versionen aller Bibliotheken fest. -->
+    <parent>
+        <groupId>ch.benedict.m321</groupId>
+        <artifactId>m321-chat-app</artifactId>
+        <version>0.1.0</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>batch-writer</artifactId>
+    <version>0.1.0</version>
+    <name>batch-writer</name>
+    <description>Schreibt Nachrichten aus der Queue chat.persist gebuendelt in PostgreSQL (Modul M321)</description>
+
+    <properties>
+        <java.version>21</java.version>
+    </properties>
+
+    <dependencies>
+        <!-- Spring AMQP: die Anbindung an RabbitMQ (Konsument, ACK, Verbindung). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
+
+        <!-- JDBC mit Verbindungspool (Hikari). Wir schreiben mit reinem JDBC, ohne ORM. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+
+        <!-- Treiber fuer PostgreSQL. Wird nur zur Laufzeit gebraucht, nicht beim Kompilieren. -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- JSON lesen. Der Koerper der Queue-Nachricht wird von Hand umgewandelt. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+
+        <!-- JUnit, AssertJ und Spring-Testhilfen -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Echte PostgreSQL und echtes RabbitMQ in Docker-Containern fuer die Tests.
+             Deshalb muss beim Testen Docker laufen. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>rabbitmq</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Baut ein ausfuehrbares JAR, das im Docker-Image gestartet wird -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
