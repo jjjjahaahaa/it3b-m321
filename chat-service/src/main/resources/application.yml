@@ -5,18 +5,19 @@ spring:
   application:
     name: chat-service
 
-  # Verbindung zur Datenbank aus docker-compose.
-  # Zugangsdaten stehen hier im Klartext, weil das eine Uebungsumgebung ist.
+  # Verbindung zur Datenbank. Im Compose-Stack setzt docker-compose.yml die Variablen (aus .env).
+  # Ohne Variablen gelten die Werte nach dem Doppelpunkt, damit man den Dienst weiterhin aus
+  # der IDE gegen einen lokal laufenden PostgreSQL und RabbitMQ starten kann.
   datasource:
-    url: jdbc:postgresql://localhost:5432/chat
-    username: chat
-    password: chat
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:chat}
+    username: ${POSTGRES_USER:chat}
+    password: ${POSTGRES_PASSWORD:chat}
 
   rabbitmq:
-    host: localhost
-    port: 5672
-    username: chat
-    password: chat
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_DEFAULT_USER:chat}
+    password: ${RABBITMQ_DEFAULT_PASS:chat}
 
 # Swagger UI liegt unter http://localhost:8080/swagger-ui.html
 springdoc:
@@ -33,6 +34,10 @@ management:
   endpoint:
     health:
       show-details: always
+      # Schaltet /actuator/health/liveness ein. Es sagt nur "der Dienst lebt" und fragt
+      # weder Datenbank noch Broker. Der Compose-Healthcheck nutzt es.
+      probes:
+        enabled: true
 
 logging:
   level:

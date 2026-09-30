@@ -1,0 +1,7 @@
+# Was NICHT in den Build-Kontext von Docker gehoert. Vor allem .env: sonst kaeme das Passwort in ein Image.
+.git
+.env
+**/target
+.idea
+docs/design/mermaid.min.js
+docs/skizze-architektur.heic

@@ -1,41 +1,117 @@
-# Infrastruktur fuer den Bootstrap: Datenbank und Message Broker.
-# Der chat-service laeuft in dieser Phase noch auf dem Host (aus der IDE).
+# Der ganze Stack: Datenbank, Broker, chat-service und batch-writer.
+# Kein Dienst veroeffentlicht einen Port auf dem Rechner (kein "ports:"). Alles laeuft im internen
+# Netzwerk chat-net. Von aussen kommt man nur mit "docker compose exec <dienst> ..." hinein.
+#
+# Zugangsdaten stehen nicht hier, sondern in der Datei .env (Vorlage: .env.example).
+# Anlegen mit:  cp .env.example .env
 services:
 
   postgres:
     image: postgres:17-alpine
-    container_name: m321-postgres
     environment:
-      POSTGRES_DB: chat
-      POSTGRES_USER: chat
-      POSTGRES_PASSWORD: chat
-    ports:
-      # NUR fuer den Bootstrap veroeffentlicht - siehe Hinweis im Plan.
-      - "5432:5432"
+      # ":?" bricht mit der Meldung ab, wenn die Variable fehlt (also wenn .env nicht angelegt wurde).
+      POSTGRES_DB: "${POSTGRES_DB:?Datei .env fehlt, bitte zuerst cp .env.example .env ausfuehren}"
+      POSTGRES_USER: "${POSTGRES_USER:?Datei .env fehlt, bitte zuerst cp .env.example .env ausfuehren}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Datei .env fehlt, bitte zuerst cp .env.example .env ausfuehren}"
     volumes:
       # Alle .sql-Dateien hier drin fuehrt das Postgres-Image beim ERSTEN Start
       # in alphabetischer Reihenfolge aus. Danach nie wieder.
       - ./db:/docker-entrypoint-initdb.d:ro
       - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # "$$" damit Compose die Variable nicht selbst ersetzt, sondern erst der Container.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
     networks:
       - chat-net
 
   rabbitmq:
     image: rabbitmq:4-management-alpine
-    container_name: m321-rabbitmq
+    # Ein fester Rechnername, denn RabbitMQ legt seine Daten unter diesem Namen ab. Bei einem
+    # neu erzeugten Container mit zufaelligem Namen fande der Broker seine Queuen nicht wieder.
+    hostname: rabbitmq
     environment:
-      RABBITMQ_DEFAULT_USER: chat
-      RABBITMQ_DEFAULT_PASS: chat
-    ports:
-      # NUR fuer den Bootstrap veroeffentlicht - siehe Hinweis im Plan.
-      - "5672:5672"
-      # Management-Oberflaeche: http://localhost:15672 (chat / chat)
-      - "15672:15672"
+      RABBITMQ_DEFAULT_USER: "${RABBITMQ_DEFAULT_USER:?Datei .env fehlt, bitte zuerst cp .env.example .env ausfuehren}"
+      RABBITMQ_DEFAULT_PASS: "${RABBITMQ_DEFAULT_PASS:?Datei .env fehlt, bitte zuerst cp .env.example .env ausfuehren}"
+    volumes:
+      # Exchange, Queuen und Bindung. Eingespielt wird die Datei vom Healthcheck.
+      - ./rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+      - ./rabbitmq/healthcheck.sh:/healthcheck.sh:ro
+      # Ohne dieses Volume waeren nach einem Neustart des Brokers alle Nachrichten in den Queuen weg.
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      # Gesund heisst: der Broker laeuft UND chat.persist existiert (siehe rabbitmq/healthcheck.sh).
+      test: ["CMD", "sh", "/healthcheck.sh"]
+      # Erste Pruefung erst nach 5 Sekunden: vorher legt der Broker noch seine Cookie-Datei an.
+      interval: 5s
+      timeout: 20s
+      retries: 20
+      start_period: 20s
+    networks:
+      - chat-net
+
+  chat-service:
+    build:
+      context: .
+      dockerfile: chat-service/Dockerfile
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+    depends_on:
+      # Erst starten, wenn Datenbank und Broker (mit der Queue chat.persist) bereit sind.
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      # "liveness" fragt nur, ob der Dienst selbst lebt. Die Datenbank gehoert bewusst nicht dazu:
+      # zum Senden braucht der chat-service sie nicht, und ein Datenbankausfall soll ihn nicht
+      # als krank melden.
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/actuator/health/liveness"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+    networks:
+      - chat-net
+
+  batch-writer:
+    build:
+      context: .
+      dockerfile: batch-writer/Dockerfile
+    # Bewusst KEIN "restart:". Ein gestoppter Dienst soll gestoppt bleiben (Szenario S4), und ein
+    # Fehler beim Start soll sichtbar sein statt sich im Kreis zu drehen. Mehrere Instanzen:
+    #   docker compose up -d --scale batch-writer=2
+    # (deshalb auch kein fester container_name).
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+      BATCH_SIZE: ${BATCH_SIZE:-500}
+      BATCH_TIMEOUT_MS: ${BATCH_TIMEOUT_MS:-200}
+      DB_RETRY_PAUSE_MS: ${DB_RETRY_PAUSE_MS:-2000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     networks:
       - chat-net
 
 volumes:
   postgres-data:
+  rabbitmq-data:
 
 networks:
   chat-net:
