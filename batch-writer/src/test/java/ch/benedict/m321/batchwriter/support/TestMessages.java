@@ -9,8 +9,9 @@ import java.util.UUID;
  */
 public final class TestMessages {
 
+    /** Privat, damit niemand ein Objekt erzeugt: die Klasse hat nur statische Hilfsmethoden. */
     private TestMessages() {
-        // Nur statische Hilfsmethoden, es gibt nichts zu erzeugen.
+        // Nichts zu tun.
     }
 
     /** Eine Nachricht mit frischer ID und der aktuellen Zeit als Sendezeit. */

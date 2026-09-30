@@ -1,8 +1,8 @@
 package ch.benedict.m321.batchwriter.message;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -21,10 +21,9 @@ class MessageParserTest {
     private final MessageParser parser = new MessageParser();
 
     /** Liest die beobachtete Nachricht aus src/test/resources als rohe Bytes. */
-    private byte[] readObservedMessage() throws IOException {
-        try (InputStream file = getClass().getResourceAsStream("/chat-service-message.json")) {
-            return file.readAllBytes();
-        }
+    private byte[] readObservedMessage() throws Exception {
+        Path file = Path.of(getClass().getResource("/chat-service-message.json").toURI());
+        return Files.readAllBytes(file);
     }
 
     /** Wandelt einen JSON-Text in Bytes um, so wie sie in der Queue laegen (UTF-8). */

@@ -55,7 +55,7 @@ public final class TestInfrastructure {
     static {
         // Das Schema aus dem Repository wird beim ersten Start automatisch ausgefuehrt,
         // genau wie im Compose-Stack ueber das Verzeichnis docker-entrypoint-initdb.d.
-        Path schemaFile = findInRepository("db/01-schema.sql");
+        Path schemaFile = RepositoryFiles.find("db/01-schema.sql");
         POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine")
                 .withDatabaseName(DATABASE_NAME)
                 .withUsername(DATABASE_USER)
@@ -67,7 +67,7 @@ public final class TestInfrastructure {
 
         // Der Broker bekommt dieselbe definitions.json wie im Compose-Stack. Sie wird erst
         // nach dem Start eingespielt, weil der Broker sonst den Standardbenutzer nicht anlegt.
-        Path definitionsFile = findInRepository("rabbitmq/definitions.json");
+        Path definitionsFile = RepositoryFiles.find("rabbitmq/definitions.json");
         RABBIT = new RabbitMQContainer("rabbitmq:4-management-alpine")
                 .withCopyFileToContainer(
                         MountableFile.forHostPath(definitionsFile),
@@ -103,25 +103,9 @@ public final class TestInfrastructure {
         throw new IllegalStateException("Queue " + queueName + " ist nach 30 Sekunden nicht da");
     }
 
+    /** Privat, damit niemand ein Objekt erzeugt: die Klasse hat nur statische Hilfsmethoden. */
     private TestInfrastructure() {
-        // Nur statische Hilfsmethoden, es gibt nichts zu erzeugen.
-    }
-
-    /**
-     * Sucht eine Datei des Repositories, egal ob der Test aus dem Modulverzeichnis (Maven)
-     * oder aus dem Wurzelverzeichnis (IDE) gestartet wurde. Dazu geht sie vom aktuellen
-     * Verzeichnis so lange nach oben, bis die Datei dort liegt.
-     */
-    private static Path findInRepository(String relativePath) {
-        Path directory = Path.of(System.getProperty("user.dir")).toAbsolutePath();
-        while (directory != null) {
-            Path candidate = directory.resolve(relativePath);
-            if (Files.exists(candidate)) {
-                return candidate;
-            }
-            directory = directory.getParent();
-        }
-        throw new IllegalStateException("Datei nicht gefunden: " + relativePath);
+        // Nichts zu tun.
     }
 
     /** JDBC-Adresse der Test-Datenbank, mit denselben Optionen wie im Betrieb. */
