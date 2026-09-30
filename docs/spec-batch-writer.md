@@ -141,7 +141,7 @@ das Paket nie voll werden und läuft immer ins Zeitlimit. Prefetch = Paketgröss
 | F5 | Unbekannter Datenbankfehler | wie F2: warten und neu versuchen | nichts geht verloren |
 | F6 | Dienst wird zwischen Commit und ACK gestoppt (S4) | RabbitMQ stellt das Paket wieder zu | doppelt zugestellt, einmal gespeichert (F1) |
 | F7 | RabbitMQ nicht erreichbar | Verbindung baut sich von selbst wieder auf; unbestätigte Pakete kommen erneut | wie F6 |
-| F8 | Unerwarteter Programmfehler im Listener | Ausnahme verlässt den Listener, Paket wird wieder eingereiht; nach 3 Zustellungen wandert es in `chat.dlq` | Sicherheitsnetz (`x-delivery-limit: 3`) |
+| F8 | Unerwarteter Programmfehler im Listener | der Listener fängt ihn selbst ab und gibt das **ganze Paket** mit `nack` an die Queue zurück; nach 3 Zustellungen wandert es in `chat.dlq` | Sicherheitsnetz (`x-delivery-limit: 3`) |
 | F9 | Zweite Instanz (S6) | konkurrierender Konsument an derselben Queue | jede Nachricht geht an genau eine Instanz |
 | F10 | Dienst wird beendet (SIGTERM) | neue Lieferung stoppt, Warteschleife aus F2 wird unterbrochen, unbestätigte Nachrichten kommen zurück in die Queue | nichts verloren |
 
@@ -184,7 +184,12 @@ nur die eine. Der Einzelweg gilt nur für das betroffene Paket, der Normalfall b
 
 **F8 — Sicherheitsnetz.** Der Listener fängt die erwarteten Fehler selbst ab. Was trotzdem
 herauskommt, ist ein Programmfehler. Ihn endlos zu wiederholen wäre falsch, deshalb greift das
-`x-delivery-limit: 3` der Queue.
+`x-delivery-limit: 3` der Queue. Das Zurückgeben macht der Listener **von Hand**: bei manueller
+Bestätigung gibt Spring AMQP ein Paket nach einer Ausnahme *nicht* von selbst zurück (im Quelltext von
+`BlockingQueueConsumer.rollbackOnExceptionIfNecessary` geprüft). Die Nachrichten blieben unbestätigt
+hängen, und der Konsument stünde still. Deshalb ein einziges `basicNack(höchsteNummer, multiple=true,
+requeue=true)`: es gibt alles zurück, was in diesem Paket noch offen ist, und lässt bereits
+Bestätigtes in Ruhe.
 
 **F9 — Zwei Instanzen brauchen keine Absprache.** Beide hängen an derselben Queue, RabbitMQ verteilt
 die Nachrichten (Competing Consumers). Es gibt keinen gemeinsamen Zustand im Dienst. Schreiben
