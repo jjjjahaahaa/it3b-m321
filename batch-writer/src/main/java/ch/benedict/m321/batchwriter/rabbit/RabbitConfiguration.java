@@ -35,6 +35,7 @@ public class RabbitConfiguration {
         factory.setConsumerBatchEnabled(true);
         factory.setBatchSize(batchSize);
 
+        // Prefetch = so viele unbestaetigte Nachrichten liefert RabbitMQ diesem Konsumenten hoechstens aus.
         // Prefetch = Paketgroesse. Liesse RabbitMQ weniger unbestaetigte Nachrichten zu, koennte ein
         // Paket nie voll werden und liefe jedes Mal ins Zeitlimit.
         factory.setPrefetchCount(batchSize);
@@ -51,6 +52,9 @@ public class RabbitConfiguration {
         factory.setAcknowledgeMode(AcknowledgeMode.MANUAL);
 
         // Genau ein Konsument pro Instanz. Zwei Instanzen ergeben zwei Konsumenten an der Queue.
+        // Szenario S6: zwei Instanzen brauchen keine Absprache. RabbitMQ gibt jede Nachricht nur EINEM
+        // Konsumenten (Competing Consumers), und sollte doch einmal dieselbe ID zweimal ankommen,
+        // verwirft sie der Primaerschluessel (ON CONFLICT in MessageRepository).
         factory.setConcurrentConsumers(1);
         factory.setMaxConcurrentConsumers(1);
 

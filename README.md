@@ -46,6 +46,8 @@ erreichbar.
   über die man beim ersten Mal fällt.
 - [`docs/spec-batch-writer.md`](docs/spec-batch-writer.md) — Spezifikation des `batch-writer`
   (Bewertung 1): Vertrag der Queue, Verhalten in jedem Fehlerfall, Datenmodell, Abnahmekriterien.
+- [`docs/erklaerung-batch-writer.md`](docs/erklaerung-batch-writer.md) — der Code erklärt: Weg einer
+  Nachricht, welche Stelle welches Szenario entscheidet, Fragen und Antworten fürs Code-Review.
 - [`docs/plan-batch-writer.md`](docs/plan-batch-writer.md) — der Umsetzungsplan dazu, Aufgabe für
   Aufgabe, mit den gemessenen Werten am Ende.
 - [`CLAUDE.md`](CLAUDE.md) — Codestil-Regeln für dieses Projekt. Gelten auch für dich.

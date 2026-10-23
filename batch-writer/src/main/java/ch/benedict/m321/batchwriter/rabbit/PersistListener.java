@@ -32,6 +32,18 @@ import org.springframework.stereotype.Component;
  * Nichts wird je zurueck in die Queue gestellt, ausser beim Beenden des Dienstes. Der Grund: ein NACK
  * mit Wiedereinreihen zaehlt in RabbitMQ 4 nicht gegen das Zustelllimit, eine fehlerausloesende
  * Nachricht kaeme also endlos wieder (siehe docs/spec-batch-writer.md, F2 und F8).
+ *
+ * Drei Woerter, die in dieser Klasse immer wieder vorkommen:
+ * - ACK (basicAck): "diese Nachricht ist erledigt, du darfst sie loeschen". Erst dann vergisst
+ *   RabbitMQ sie. Solange kein ACK kam, gilt sie als "unbestaetigt" und ist nicht verloren.
+ * - NACK (basicNack): "diese Nachricht nehme ich nicht". Mit requeue = true kommt sie zurueck in die
+ *   Queue, mit requeue = false wird sie verworfen, bei uns also nach chat.dlq weitergeleitet.
+ * - Lieferungsnummer (deliveryTag): RabbitMQ nummeriert jede Nachricht, die es auf einem Kanal
+ *   ausliefert, fortlaufend durch. ACK und NACK sagen ueber diese Nummer, welche Nachricht gemeint ist.
+ *
+ * Wo sich die Szenarien entscheiden: S4 (wenige Transaktionen) in writeAndAcknowledge, S5 (Duplikat)
+ * in MessageRepository.INSERT_SQL, S6 (zwei Instanzen) in RabbitConfiguration, S7 (Datenbank weg)
+ * in writePatiently.
  */
 @Component
 public class PersistListener {
@@ -73,6 +85,10 @@ public class PersistListener {
     @RabbitListener(id = "persistListener", queues = RabbitConfiguration.PERSIST_QUEUE,
             containerFactory = "batchContainerFactory")
     public void onBatch(List<Message> rawMessages, Channel channel) throws IOException {
+        // "id" gibt dem Listener einen Namen: die Tests holen ihn darueber, um ihn anzuhalten.
+        // "containerFactory" verweist auf die Einstellungen in RabbitConfiguration (Pakete, ACK von Hand).
+        // Der Kanal (channel) ist die Leitung zum Broker, ueber die dieses Paket kam. Nur auf genau
+        // diesem Kanal duerfen wir es bestaetigen oder ablehnen, ein anderer kennt die Nummern nicht.
         try {
             handleBatch(rawMessages, channel);
         } catch (InterruptedException stopping) {
@@ -143,6 +159,9 @@ public class PersistListener {
         }
 
         // Erst jetzt bestaetigen. Vorher ein ACK, und ein Absturz haette die Nachrichten fuer immer verloren.
+        // Szenario S4: weil das ganze Paket in EINER Transaktion stand, kosten 1000 gestaute Nachrichten
+        // nur zwei Transaktionen (gemessen in BatchingTest) statt tausend.
+        // Das zweite Argument false heisst: nur genau diese eine Nummer bestaetigen, nicht alle davor.
         for (Delivery delivery : deliveries) {
             channel.basicAck(delivery.deliveryTag(), false);
         }
@@ -191,6 +210,16 @@ public class PersistListener {
      * Warten hilft nicht) oder wenn der Thread beim Beenden unterbrochen wird.
      */
     private void writePatiently(List<IncomingMessage> messages) throws InterruptedException {
+        // Szenario S7 entscheidet sich hier. Kein ACK, kein NACK, kein Beenden: der Thread wartet einfach.
+        // Die Nachrichten bleiben beim Broker als "unbestaetigt" liegen und gehen nicht verloren.
+        //
+        // Bekannte Grenze: RabbitMQ wartet hoechstens 30 Minuten auf eine Bestaetigung (consumer_timeout).
+        // Danach schliesst es den Kanal und stellt die Nachrichten neu zu. Das zaehlt gegen
+        // x-delivery-limit: 3. Nach etwa 90 Minuten Ausfall laegen also gute Nachrichten in chat.dlq.
+        // Abhilfe waere, consumer_timeout hoeher zu setzen oder die Wartezeit zu begrenzen.
+        //
+        // while (true) ist hier Absicht: die Schleife endet nur mit return (geschrieben), mit einer
+        // BadDataException (faellt aus der Schleife) oder mit InterruptedException aus Thread.sleep.
         while (true) {
             try {
                 repository.insertBatch(messages);
@@ -210,6 +239,7 @@ public class PersistListener {
      * wo man sie ansehen kann.
      */
     private void reject(Channel channel, long deliveryTag) throws IOException {
+        // Die drei Argumente: welche Nummer, multiple = false (nur diese eine), requeue = false (nicht zurueck).
         channel.basicNack(deliveryTag, false, false);
     }
 
