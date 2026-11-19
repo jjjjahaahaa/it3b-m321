@@ -96,6 +96,10 @@ Korrigiert: nichts. Für Schritt 4 ist noch offen, dass der Stream seine roomId 
 
 **Geprüft und korrigiert:**
 
+Geprüft: Zuerst war der Test rot, weil der Stream in Raum B auch die Nachrichten aus Raum A bekommen hat. Mit dem Filter ist er grün. Ob ein Stream eine Nachricht bekommt, wird in sendToRoom mit stream.roomId().equals(roomId) entschieden. Die roomId kommt aus dem JSON, weil der Routing-Key leer ist.
+
+Korrigiert: nichts. Der Test mit zwei Instanzen braucht etwa 70 Sekunden, das lasse ich vorerst so.
+
 ## Schritt 5 — Grenze und Heartbeat
 
 **Ziel:** Die Live-Queue hat `x-max-length: 1000` und `x-overflow: drop-head`, und der chat-service will einen Heartbeat von 15 Sekunden.
