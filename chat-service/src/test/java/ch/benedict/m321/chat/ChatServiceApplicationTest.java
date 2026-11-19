@@ -11,6 +11,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 @SpringBootTest
 class ChatServiceApplicationTest {
 
+    /** Besteht, sobald Spring alle Klassen des chat-service ohne Fehler zusammenbauen kann. */
     @Test
     void contextLoads() {
         // Kein Inhalt noetig - der Test besteht darin, dass @SpringBootTest oben durchlaeuft.

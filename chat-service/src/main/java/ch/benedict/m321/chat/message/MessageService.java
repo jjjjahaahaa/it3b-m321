@@ -23,6 +23,10 @@ public class MessageService {
     private final RabbitTemplate rabbitTemplate;
     private final MessageRepository messageRepository;
 
+    /**
+     * Spring reicht RabbitTemplate und Repository herein (Konstruktor-Injektion). So kann ein Test
+     * beide durch eigene Varianten ersetzen, ohne dass diese Klasse etwas davon merkt.
+     */
     public MessageService(RabbitTemplate rabbitTemplate, MessageRepository messageRepository) {
         this.rabbitTemplate = rabbitTemplate;
         this.messageRepository = messageRepository;
