@@ -213,3 +213,15 @@ Korrigiert: nichts. In Schritt 3 lasse ich aber ChatServiceApplicationTest von I
 **Test:** Das Skript läuft auf einem frischen Klon durch, und alle Szenarien bestehen. Die Messwerte stehen am Ende von diesem Plan.
 
 **Geprüft und korrigiert:**
+
+---
+
+## Änderungen am Plan
+
+Der Text der Schritte oben bleibt unverändert. Jede Änderung steht hier mit ihrem Grund.
+
+### Änderung 1 — zu Schritt 3: `ChatServiceApplicationTest` erbt von `IntegrationTest`
+
+**Was:** In Schritt 3 erbt `ChatServiceApplicationTest` zusätzlich von `IntegrationTest`.
+
+**Grund:** In Schritt 3 lasse ich aber ChatServiceApplicationTest von IntegrationTest erben, damit im Log kein «Connection refused» mehr steht. (Seit Schritt 2 startet in diesem Test der Live-Listener, findet aber kein RabbitMQ unter localhost, siehe «Geprüft und korrigiert» bei Schritt 2.)
