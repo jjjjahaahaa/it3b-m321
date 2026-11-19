@@ -72,6 +72,10 @@ Korrigiert: nichts. In Schritt 3 lasse ich aber ChatServiceApplicationTest von I
 
 **Geprüft und korrigiert:**
 
+Geprüft: Bei data: steht genau das gleiche JSON wie in chat.persist, und beide Instanzen bekommen die gleiche Nachricht. Unterwegs gab es drei Fehler, die schon behoben sind: der Konverter hat __TypeId__ abgelehnt, der Port 8080 war doppelt belegt und ein Test ist hängen geblieben.
+
+Korrigiert: nichts. Für Schritt 4 ist noch offen, dass der Stream seine roomId noch nicht speichert. Für Schritt 8 ist offen, dass sendToAll noch ohne Sperre sendet.
+
 ## Schritt 4 — Raumfilter
 
 **Ziel:** Ein Stream bekommt nur die Nachrichten, bei denen die `roomId` zu seinem Raum passt.
