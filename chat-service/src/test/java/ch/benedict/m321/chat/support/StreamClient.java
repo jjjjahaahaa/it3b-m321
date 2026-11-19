@@ -120,6 +120,15 @@ public class StreamClient {
     }
 
     /**
+     * Wartet hoechstens die angegebene Zeit, bis der Server den Stream beendet hat. Daran erkennt man
+     * es: der Lese-Thread ist am Ende der Antwort angekommen und fertig. Gibt zurueck, ob das passiert ist.
+     */
+    public boolean waitUntilServerClosed(int timeoutSeconds) throws InterruptedException {
+        reader.join(timeoutSeconds * 1000L);
+        return !reader.isAlive();
+    }
+
+    /**
      * Schliesst den Stream von der Client-Seite, so wie ein Browser, dessen Tab zugeht. Ist noch gar
      * keine Antwort da, wird die Anfrage abgebrochen.
      */

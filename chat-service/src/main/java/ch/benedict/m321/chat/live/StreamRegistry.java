@@ -54,6 +54,24 @@ public class StreamRegistry {
         }
     }
 
+    /**
+     * Beendet alle offenen Streams (complete) und leert die Liste. Gebraucht nach einer Neuverbindung zu
+     * RabbitMQ: waehrend der Unterbrechung haben die Clients vielleicht etwas verpasst. Beendet sich ihr
+     * Stream, verbinden sie sich neu und holen es mit Last-Event-ID nach (Spec 2.3).
+     * Die Liste wird unter der Sperre kopiert und geleert, beendet wird danach ohne Sperre.
+     */
+    public void completeAll() {
+        List<LiveStream> toComplete;
+        synchronized (streams) {
+            toComplete = new ArrayList<>(streams);
+            streams.clear();
+        }
+        for (LiveStream stream : toComplete) {
+            stream.emitter().complete();
+        }
+        log.info("{} offene Streams beendet", toComplete.size());
+    }
+
     /** Wie viele Streams gerade offen sind. Gebraucht von den Tests. */
     public int openStreams() {
         synchronized (streams) {

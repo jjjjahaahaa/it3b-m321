@@ -8,16 +8,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
-import ch.benedict.m321.chat.ChatServiceApplication;
+import ch.benedict.m321.chat.support.ChatServiceInstance;
 import ch.benedict.m321.chat.support.StreamClient;
-import ch.benedict.m321.chat.support.TestInfrastructure;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.builder.SpringApplicationBuilder;
-import org.springframework.boot.web.servlet.context.ServletWebServerApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 
@@ -40,31 +37,11 @@ class TwoInstancesStreamTest {
 
     private final ObjectMapper json = new ObjectMapper();
 
-    /**
-     * Startet eine Instanz des chat-service, verbunden mit den Testcontainern. server.port = 0 heisst:
-     * das Betriebssystem waehlt einen freien Port, damit sich die beiden Instanzen nicht in die Quere kommen.
-     *
-     * Die Werte gehen als Startargumente mit (--name=wert), nicht ueber properties(): die waeren nur
-     * Standardwerte, und application.yml wuerde sie mit Port 8080 und localhost ueberschreiben.
-     */
-    private static ConfigurableApplicationContext startInstance() {
-        return new SpringApplicationBuilder(ChatServiceApplication.class)
-                .run(
-                        "--server.port=0",
-                        "--spring.datasource.url=" + TestInfrastructure.jdbcUrl(),
-                        "--spring.datasource.username=" + TestInfrastructure.databaseUser(),
-                        "--spring.datasource.password=" + TestInfrastructure.databasePassword(),
-                        "--spring.rabbitmq.host=" + TestInfrastructure.brokerHost(),
-                        "--spring.rabbitmq.port=" + TestInfrastructure.brokerPort(),
-                        "--spring.rabbitmq.username=" + TestInfrastructure.brokerUser(),
-                        "--spring.rabbitmq.password=" + TestInfrastructure.brokerPassword());
-    }
-
     /** Startet beide Instanzen einmal fuer alle Tests dieser Klasse. */
     @BeforeAll
     static void startTwoInstances() {
-        instanceA = startInstance();
-        instanceB = startInstance();
+        instanceA = ChatServiceInstance.start();
+        instanceB = ChatServiceInstance.start();
     }
 
     /** Die Instanzen hat der Test selbst gestartet, also macht er sie am Ende auch wieder zu. */
@@ -74,17 +51,23 @@ class TwoInstancesStreamTest {
         instanceB.close();
     }
 
-    /** Die Adresse einer Instanz mit dem Port, den das Betriebssystem ihr gegeben hat. */
+    /** Die Adresse einer Instanz, siehe ChatServiceInstance. */
     private static String baseAddress(ConfigurableApplicationContext instance) {
-        ServletWebServerApplicationContext webContext = (ServletWebServerApplicationContext) instance;
-        int port = webContext.getWebServer().getPort();
-        return "http://localhost:" + port;
+        return ChatServiceInstance.baseAddress(instance);
     }
 
-    /** Wartet, bis eine Instanz die erwartete Zahl offener Streams kennt, hoechstens 10 Sekunden. */
+    /** Wie viele Streams eine Instanz gerade fuer offen haelt. */
+    private int openStreams(ConfigurableApplicationContext instance) {
+        return instance.getBean(StreamRegistry.class).openStreams();
+    }
+
+    /**
+     * Wartet hoechstens 10 Sekunden, bis eine Instanz die erwartete Zahl offener Streams kennt. Der Test
+     * rechnet die Zahl immer als "vorher plus neu" aus: ein Stream, den ein frueherer Test geschlossen hat,
+     * zaehlt noch mit, bis der Server beim naechsten Schreiben merkt, dass niemand mehr zuhoert.
+     */
     private void waitForOpenStreams(ConfigurableApplicationContext instance, int expected) throws InterruptedException {
-        StreamRegistry registry = instance.getBean(StreamRegistry.class);
-        for (int attempt = 0; attempt < 200 && registry.openStreams() < expected; attempt++) {
+        for (int attempt = 0; attempt < 200 && openStreams(instance) < expected; attempt++) {
             Thread.sleep(50);
         }
     }
@@ -116,10 +99,12 @@ class TwoInstancesStreamTest {
      */
     @Test
     void messageSentToInstanceAReachesStreamsAtBothInstances() throws Exception {
+        int beforeA = openStreams(instanceA);
+        int beforeB = openStreams(instanceB);
         StreamClient streamAtA = new StreamClient(baseAddress(instanceA) + "/stream?roomId=" + ROOM_ID);
         StreamClient streamAtB = new StreamClient(baseAddress(instanceB) + "/stream?roomId=" + ROOM_ID);
-        waitForOpenStreams(instanceA, 1);
-        waitForOpenStreams(instanceB, 1);
+        waitForOpenStreams(instanceA, beforeA + 1);
+        waitForOpenStreams(instanceB, beforeB + 1);
 
         String published = send(instanceA, "an beide");
         String messageId = json.readTree(published).get("id").asText();
@@ -139,8 +124,9 @@ class TwoInstancesStreamTest {
      */
     @Test
     void eventHasIdDataAndBlankLine() throws Exception {
+        int beforeB = openStreams(instanceB);
         StreamClient stream = new StreamClient(baseAddress(instanceB) + "/stream?roomId=" + ROOM_ID);
-        waitForOpenStreams(instanceB, 1);
+        waitForOpenStreams(instanceB, beforeB + 1);
 
         String published = send(instanceA, "Format");
         String messageId = json.readTree(published).get("id").asText();
@@ -165,11 +151,13 @@ class TwoInstancesStreamTest {
     @Test
     void eachStreamGetsOnlyItsRoomAndEverySenderStaysInOrder() throws Exception {
         String roomB = createRoom(instanceA);
+        int beforeA = openStreams(instanceA);
+        int beforeB = openStreams(instanceB);
         StreamClient roomAatA = new StreamClient(baseAddress(instanceA) + "/stream?roomId=" + ROOM_ID);
         StreamClient roomAatB = new StreamClient(baseAddress(instanceB) + "/stream?roomId=" + ROOM_ID);
         StreamClient roomBatA = new StreamClient(baseAddress(instanceA) + "/stream?roomId=" + roomB);
-        waitForOpenStreams(instanceA, 2);
-        waitForOpenStreams(instanceB, 1);
+        waitForOpenStreams(instanceA, beforeA + 2);
+        waitForOpenStreams(instanceB, beforeB + 1);
 
         Thread senderOverA = startSender(instanceA, "s3-a");
         Thread senderOverB = startSender(instanceB, "s3-b");

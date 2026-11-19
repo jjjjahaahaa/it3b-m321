@@ -2,6 +2,7 @@ package ch.benedict.m321.chat.support;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -110,6 +111,30 @@ public final class TestInfrastructure {
     /** Passwort des Test-Brokers. */
     public static String brokerPassword() {
         return BROKER_PASSWORD;
+    }
+
+    /**
+     * Trennt eine Verbindung zum Broker von der Broker-Seite her, ueber die Management-API. Fuer den
+     * Dienst sieht das aus wie ein Netzabbruch oder ein Broker, der ihn rauswirft. Den Namen einer
+     * Verbindung zeigt die Management-API, zum Beispiel als Besitzer einer exklusiven Queue.
+     */
+    public static void closeConnection(String connectionName) throws IOException, InterruptedException {
+        // Der Name enthaelt Leerzeichen und ">", deshalb muss er fuer die Adresse kodiert werden.
+        String encodedName = URLEncoder.encode(connectionName, StandardCharsets.UTF_8).replace("+", "%20");
+        String address = "http://" + RABBIT.getHost() + ":" + RABBIT.getHttpPort() + "/api/connections/" + encodedName;
+        String login = BROKER_USER + ":" + BROKER_PASSWORD;
+        String encodedLogin = Base64.getEncoder().encodeToString(login.getBytes(StandardCharsets.UTF_8));
+
+        HttpRequest request = HttpRequest.newBuilder(URI.create(address))
+                .header("Authorization", "Basic " + encodedLogin)
+                .DELETE()
+                .build();
+        HttpResponse<String> response = HttpClient.newHttpClient()
+                .send(request, HttpResponse.BodyHandlers.ofString());
+
+        if (response.statusCode() != 204) {
+            throw new IOException("Broker antwortet mit " + response.statusCode() + " auf " + address);
+        }
     }
 
     /**
