@@ -48,6 +48,10 @@ Korrigiert: nichts.
 
 **Geprüft und korrigiert:**
 
+Geprüft: autoDelete = false passt zu Spec 3.2 und auch zum Test in Schritt 5. #{liveQueue.name} braucht es wirklich, und es hat einen Kommentar. Beim Message-Objekt muss ich in Schritt 3 aufpassen, dass bei data: genau das gleiche JSON steht wie in chat.persist.
+
+Korrigiert: nichts. In Schritt 3 lasse ich aber ChatServiceApplicationTest von IntegrationTest erben, damit im Log kein «Connection refused» mehr steht.
+
 ## Schritt 3 — Stream-Endpunkt mit Test für zwei Instanzen
 
 **Ziel:** `GET /stream?roomId=...` antwortet mit `text/event-stream`, bleibt offen und schickt jede Nachricht als Ereignis mit `id:` und `data:` an alle offenen Streams.
