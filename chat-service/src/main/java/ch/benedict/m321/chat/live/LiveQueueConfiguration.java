@@ -1,5 +1,7 @@
 package ch.benedict.m321.chat.live;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 
 import org.springframework.amqp.core.Binding;
@@ -25,6 +27,9 @@ public class LiveQueueConfiguration {
     /** Vorne im Namen jeder Live-Queue. Dahinter kommt die UUID der Instanz. */
     public static final String QUEUE_PREFIX = "chat.live.";
 
+    /** Hoechstzahl wartender Nachrichten in der Live-Queue (Spec 3.3, Szenario S6). */
+    private static final int MAX_WAITING_MESSAGES = 1000;
+
     /**
      * Die Live-Queue mit einem Namen aus chat.live. und einer zufaelligen UUID. Die UUID wird bei jedem
      * Start neu gezogen, nicht aus dem Hostnamen genommen: der bliebe nach einem Neustart gleich.
@@ -34,11 +39,19 @@ public class LiveQueueConfiguration {
      *   diese Verbindung weg ist (Szenario S4).
      * autoDelete = false: sie bleibt, auch wenn der Listener einmal kurz nicht liest. Geloescht
      *   wird sie nur ueber die Verbindung.
+     *
+     * Dazu zwei Grenzen (Spec 3.3): x-max-length = 1000 wartende Nachrichten, und x-overflow = drop-head
+     * heisst, dass bei der 1001. die AELTESTE rausfliegt und nicht die neue abgelehnt wird. Fuer die
+     * Anzeige ist die neueste wichtiger. Nachrichten, die schon abgeholt, aber noch nicht bestaetigt
+     * sind, zaehlen nicht mit. Eine TTL pro Nachricht gibt es bewusst nicht (Spec 2.3).
      */
     @Bean
     public Queue liveQueue() {
         String queueName = QUEUE_PREFIX + UUID.randomUUID();
-        return new Queue(queueName, false, true, false);
+        Map<String, Object> limits = new HashMap<>();
+        limits.put("x-max-length", MAX_WAITING_MESSAGES);
+        limits.put("x-overflow", "drop-head");
+        return new Queue(queueName, false, true, false, limits);
     }
 
     /**

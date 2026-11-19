@@ -39,9 +39,10 @@ public class LiveMessageListener {
      *
      * "#{liveQueue.name}" fragt Spring nach dem Namen der Bean liveQueue, denn der Name steht erst beim
      * Start fest und kann nicht als fester Text dastehen. Die Fabrik liveListenerContainerFactory liest
-     * mit genau einem Thread und wandelt nichts um (LiveQueueConfiguration).
+     * mit genau einem Thread und wandelt nichts um (LiveQueueConfiguration). Ueber die id "liveListener"
+     * findet ein Test den Listener, um ihn kurz anzuhalten.
      */
-    @RabbitListener(queues = "#{liveQueue.name}", containerFactory = "liveListenerContainerFactory")
+    @RabbitListener(id = "liveListener", queues = "#{liveQueue.name}", containerFactory = "liveListenerContainerFactory")
     public void onMessage(Message message) {
         String messageJson = new String(message.getBody(), StandardCharsets.UTF_8);
         JsonNode root = readJson(messageJson);
