@@ -24,6 +24,10 @@ Ich arbeite nach `docs/spec-live-zustellung.md`. Jeder Schritt hört mit einem g
 
 **Geprüft und korrigiert:**
 
+Geprüft: Ich habe geschaut, ob es okay ist, dass die Tests ohne definitions.json laufen. Das ist richtig so, weil es sonst im Test auch chat.persist geben würde. Dort läuft kein batch-writer, also würden sich alle Testnachrichten darin sammeln. Ausserdem habe ich geprüft, ob die Test-Kontexte im Zwischenspeicher bleiben dürfen. Das geht, weil jeder Kontext seine eigene exklusive Live-Queue hat. Anders als in Bewertung 1 gibt es keine gemeinsame Queue.
+
+Korrigiert: nichts.
+
 ## Schritt 2 — Live-Queue
 
 **Ziel:** Beim Start macht jede Instanz die Queue `chat.live.` plus eine UUID (`exclusive: true`, `durable: false`, an `chat.messages` gebunden). Ein Listener schreibt jede Nachricht ins Log.
