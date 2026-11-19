@@ -144,6 +144,10 @@ Korrigiert: nichts.
 
 **Geprüft und korrigiert:**
 
+Geprüft: Wenn der Broker die Verbindung trennt, beendet ReconnectStreamCloser.onCreate() alle Streams, aber nicht bei der ersten Verbindung beim Start. Genau so läuft es in S6 nach docker unpause ab. In den Tests gab es zwei Fehler, die jetzt behoben sind. Der neue Test war zuerst fälschlicherweise grün, weil der Stream noch keine Kopfzeilen hatte. Jetzt kommt zuerst eine Nachricht und erst dann wird getrennt, und so war der Test richtig rot. Ausserdem hat der Test mit zwei Instanzen zu früh gesendet, weil ein alter Stream noch mitgezählt wurde.
+
+Korrigiert: nichts. Dass die Tests langsam herunterfahren, lasse ich so.
+
 ## Schritt 7 — Nachholen
 
 **Ziel:** Wenn `Last-Event-ID` mitkommt, sucht der Stream das `sent_at` von dieser Nachricht. Dann schickt er zuerst alle Nachrichten im gleichen Raum mit gleichem oder späterem `sent_at`, die älteste zuerst, aber ohne die Nachricht selbst.
