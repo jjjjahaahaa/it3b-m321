@@ -170,6 +170,10 @@ Korrigiert: nichts. Dass die Tests langsam herunterfahren, lasse ich so.
 
 **Geprüft und korrigiert:**
 
+Geprüft: Wenn Last-Event-ID mitkommt, holt findFromSentAt alle Nachrichten mit sent_at >= und id <>, die älteste zuerst. Damit sind auch zwei Nachrichten mit dem gleichen sent_at abgedeckt. Ohne den Header läuft der Stream auch ohne Datenbank (S5). Bei nachgeholten Nachrichten hat sentAt nur 6 statt 9 Nachkommastellen, weil die Datenbank nur Mikrosekunden speichert. Das lasse ich so.
+
+Korrigiert: nichts. Für Schritt 8 ist noch die Lücke zwischen Nachholen und Anmelden offen. Für Schritt 9 ist offen: Wenn die Datenbank beim Nachholen nicht erreichbar ist, endet die Anfrage im Moment mit 500, und dann gibt EventSource auf. Das soll gleich enden wie bei einer unbekannten ID, also mit reload, und danach läuft der Stream live weiter. Dazu kommt noch das zweite Suchen nach einer Sekunde aus Spec 2.4.
+
 ## Schritt 8 — Nichts doppelt
 
 **Ziel:** Während dem Nachholen kommen die Live-Nachrichten in eine Warteliste. Danach wird die Warteliste geschickt, aber ohne die IDs, die schon im `HashSet` sind. Das Ganze ist mit `synchronized` geschützt, aber die Sperre gilt nur zum Umschalten und zum Senden, nicht während der Datenbankabfrage.
