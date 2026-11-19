@@ -101,9 +101,10 @@ public class StreamRegistry {
 
     /**
      * Schreibt ein einzelnes Ereignis in einen Stream. Klappt das nicht, ist der Client weg. Dann wird
-     * der Stream ausgetragen, statt dass der Fehler die anderen Streams aufhaelt.
+     * der Stream ausgetragen, statt dass der Fehler die anderen Streams aufhaelt. Oeffentlich, weil auch
+     * das Nachholen (StreamController) einzelne Ereignisse schickt.
      */
-    private void send(SseEmitter stream, String messageId, String messageJson) {
+    public void send(SseEmitter stream, String messageId, String messageJson) {
         SseEmitter.SseEventBuilder event = SseEmitter.event()
                 .id(messageId)
                 .data(messageJson, MediaType.TEXT_PLAIN);

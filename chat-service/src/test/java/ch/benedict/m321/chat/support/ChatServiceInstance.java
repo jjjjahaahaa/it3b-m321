@@ -24,10 +24,18 @@ public final class ChatServiceInstance {
      * Wer die Instanz startet, muss sie am Ende mit close() wieder beenden.
      */
     public static ConfigurableApplicationContext start() {
+        return start(TestInfrastructure.jdbcUrl());
+    }
+
+    /**
+     * Wie oben, aber mit einer eigenen Datenbank. Gebraucht fuer den Test, der seine Datenbank
+     * anhaelt (Szenario S5), ohne die gemeinsame Test-Datenbank der anderen Tests zu stoeren.
+     */
+    public static ConfigurableApplicationContext start(String jdbcUrl) {
         return new SpringApplicationBuilder(ChatServiceApplication.class)
                 .run(
                         "--server.port=0",
-                        "--spring.datasource.url=" + TestInfrastructure.jdbcUrl(),
+                        "--spring.datasource.url=" + jdbcUrl,
                         "--spring.datasource.username=" + TestInfrastructure.databaseUser(),
                         "--spring.datasource.password=" + TestInfrastructure.databasePassword(),
                         "--spring.rabbitmq.host=" + TestInfrastructure.brokerHost(),

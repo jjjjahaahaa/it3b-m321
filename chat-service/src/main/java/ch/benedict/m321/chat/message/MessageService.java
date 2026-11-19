@@ -1,6 +1,7 @@
 package ch.benedict.m321.chat.message;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -38,6 +39,20 @@ public class MessageService {
     public List<Message> loadHistory(UUID roomId, int limit) {
         log.debug("Verlauf angefordert: Raum {}, hoechstens {} Nachrichten", roomId, limit);
         return messageRepository.findLatest(roomId, limit);
+    }
+
+    /**
+     * Liefert die Nachrichten, die ein Client nach der Nachricht lastMessageId verpasst hat, die aelteste
+     * zuerst (Spec 2.4). Kennt die Datenbank diese Nachricht nicht, ist die Liste leer: dann laeuft der
+     * Stream einfach live weiter. Was in diesem Fall genauer passiert, regelt Schritt 9.
+     */
+    public List<Message> loadMissed(UUID roomId, UUID lastMessageId) {
+        Instant sentAt = messageRepository.findSentAt(lastMessageId);
+        if (sentAt == null) {
+            log.info("Last-Event-ID {} ist unbekannt, es wird nichts nachgeholt", lastMessageId);
+            return new ArrayList<>();
+        }
+        return messageRepository.findFromSentAt(roomId, sentAt, lastMessageId);
     }
 
     /**

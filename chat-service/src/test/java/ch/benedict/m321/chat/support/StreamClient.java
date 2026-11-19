@@ -41,7 +41,19 @@ public class StreamClient {
      * liest danach jede ankommende Zeile mit, bis der Stream zugeht oder close() aufgerufen wird.
      */
     public StreamClient(String address) {
-        HttpRequest request = HttpRequest.newBuilder(URI.create(address)).GET().build();
+        this(address, null);
+    }
+
+    /**
+     * Wie oben, aber mit der Kopfzeile Last-Event-ID, so wie ein Browser sie beim Neuverbinden selbst
+     * mitschickt. Ist lastEventId null, geht die Anfrage ohne diese Kopfzeile.
+     */
+    public StreamClient(String address, String lastEventId) {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(address)).GET();
+        if (lastEventId != null) {
+            builder.header("Last-Event-ID", lastEventId);
+        }
+        HttpRequest request = builder.build();
         pendingResponse = HttpClient.newHttpClient().sendAsync(request, HttpResponse.BodyHandlers.ofInputStream());
         reader = new Thread(this::readAllLines);
         reader.setDaemon(true);
