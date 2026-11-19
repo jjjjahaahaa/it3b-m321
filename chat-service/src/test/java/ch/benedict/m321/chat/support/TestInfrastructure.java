@@ -77,6 +77,21 @@ public final class TestInfrastructure {
         registry.add("spring.rabbitmq.password", TestInfrastructure::brokerPassword);
     }
 
+    /** JDBC-Adresse der Test-Datenbank, fuer Instanzen, die ein Test selbst startet. */
+    public static String jdbcUrl() {
+        return POSTGRES.getJdbcUrl();
+    }
+
+    /** Rechnername des Test-Brokers, von hier aus gesehen. */
+    public static String brokerHost() {
+        return RABBIT.getHost();
+    }
+
+    /** AMQP-Port des Test-Brokers. Docker vergibt ihn zufaellig. */
+    public static int brokerPort() {
+        return RABBIT.getAmqpPort();
+    }
+
     /** Benutzername der Test-Datenbank. */
     public static String databaseUser() {
         return DATABASE_USER;

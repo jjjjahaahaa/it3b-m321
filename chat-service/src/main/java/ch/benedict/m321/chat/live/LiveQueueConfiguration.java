@@ -6,6 +6,9 @@ import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.FanoutExchange;
 import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
+import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.support.converter.SimpleMessageConverter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -46,5 +49,26 @@ public class LiveQueueConfiguration {
     @Bean
     public Binding liveQueueBinding(Queue liveQueue, FanoutExchange chatExchange) {
         return BindingBuilder.bind(liveQueue).to(chatExchange);
+    }
+
+    /**
+     * Eine eigene Listener-Fabrik nur fuer die Live-Queue. Sie wandelt nichts um (SimpleMessageConverter),
+     * damit der Listener das JSON genau so bekommt, wie es am Exchange angekommen ist.
+     *
+     * Mit dem JSON-Konverter aus RabbitConfiguration versuchte Spring, die Nachricht anhand des Headers
+     * __TypeId__ in eine Klasse umzuwandeln, und lehnte das aus Sicherheitsgruenden ab. Der Konverter
+     * wird hier bewusst NICHT als eigene Bean angelegt: gaebe es zwei, wuesste der RabbitTemplate beim
+     * Senden nicht mehr, welchen er nehmen soll.
+     *
+     * Genau ein Konsument, genau ein Thread: die Nachrichten kommen in der Reihenfolge der Queue an (Spec 2.2).
+     */
+    @Bean
+    public SimpleRabbitListenerContainerFactory liveListenerContainerFactory(ConnectionFactory connectionFactory) {
+        SimpleRabbitListenerContainerFactory factory = new SimpleRabbitListenerContainerFactory();
+        factory.setConnectionFactory(connectionFactory);
+        factory.setMessageConverter(new SimpleMessageConverter());
+        factory.setConcurrentConsumers(1);
+        factory.setMaxConcurrentConsumers(1);
+        return factory;
     }
 }
