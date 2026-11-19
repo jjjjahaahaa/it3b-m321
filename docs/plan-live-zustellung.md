@@ -245,3 +245,9 @@ Der Text der Schritte oben bleibt unverändert. Jede Änderung steht hier mit ih
 **Was:** In Schritt 3 erbt `ChatServiceApplicationTest` zusätzlich von `IntegrationTest`.
 
 **Grund:** In Schritt 3 lasse ich aber ChatServiceApplicationTest von IntegrationTest erben, damit im Log kein «Connection refused» mehr steht. (Seit Schritt 2 startet in diesem Test der Live-Listener, findet aber kein RabbitMQ unter localhost, siehe «Geprüft und korrigiert» bei Schritt 2.)
+
+### Änderung 2 — zu Schritt 9: Datenbank beim Nachholen nicht erreichbar
+
+**Was:** In Schritt 9 behandelt der Stream auch eine Datenbank, die beim Nachholen nicht erreichbar ist, wie eine unbekannte ID: Status 200, als erstes `event: reload`, danach läuft er live weiter.
+
+**Grund:** Wenn die Datenbank beim Nachholen nicht erreichbar ist, endet die Anfrage im Moment mit 500, und dann gibt EventSource auf. Das soll gleich enden wie bei einer unbekannten ID, also mit reload, und danach läuft der Stream live weiter. (Aus «Geprüft und korrigiert» bei Schritt 7. Passt zu Spec 2.5: «Nur das Nachholen funktioniert in dieser Zeit nicht.»)
