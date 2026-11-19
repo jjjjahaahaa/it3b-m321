@@ -37,13 +37,13 @@ public class StreamController {
 
     /**
      * Oeffnet einen Stream fuer einen Raum. Fehlt roomId oder ist sie keine UUID, antwortet Spring
-     * selbst mit 400, weil der Parameter Pflicht ist. Der Raum wird in Schritt 4 zum Filtern gebraucht.
-     * produces sorgt fuer den Content-Type text/event-stream.
+     * selbst mit 400, weil der Parameter Pflicht ist. Der Raum wird mit dem Stream gespeichert, damit
+     * nur Nachrichten dieses Raums ankommen. produces sorgt fuer den Content-Type text/event-stream.
      */
     @GetMapping(path = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter openStream(@RequestParam UUID roomId) {
         SseEmitter stream = new SseEmitter(NO_TIMEOUT);
-        streamRegistry.add(stream);
+        streamRegistry.add(stream, roomId);
         log.info("Stream fuer Raum {} geoeffnet, jetzt {} offen", roomId, streamRegistry.openStreams());
         return stream;
     }

@@ -2,6 +2,7 @@ package ch.benedict.m321.chat.live;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -16,7 +17,8 @@ import org.springframework.stereotype.Component;
  *
  * Er nimmt die Nachricht absichtlich als rohe Bytes (Message von Spring AMQP) und nicht als
  * umgewandeltes Objekt. So steht bei data: Zeichen fuer Zeichen das JSON, das am Exchange angekommen
- * ist, also dasselbe wie in chat.persist (Spec 1.3). Aus dem JSON gelesen wird nur die id.
+ * ist, also dasselbe wie in chat.persist (Spec 1.3). Aus dem JSON gelesen werden nur die id (fuer id:)
+ * und die roomId (fuer den Raumfilter). Die Queue selbst bekommt die Nachrichten aller Raeume.
  */
 @Component
 public class LiveMessageListener {
@@ -33,7 +35,7 @@ public class LiveMessageListener {
     }
 
     /**
-     * Wird fuer jede Nachricht in der Live-Queue aufgerufen und verteilt sie an die Streams.
+     * Wird fuer jede Nachricht in der Live-Queue aufgerufen und verteilt sie an die Streams ihres Raums.
      *
      * "#{liveQueue.name}" fragt Spring nach dem Namen der Bean liveQueue, denn der Name steht erst beim
      * Start fest und kann nicht als fester Text dastehen. Die Fabrik liveListenerContainerFactory liest
@@ -42,30 +44,40 @@ public class LiveMessageListener {
     @RabbitListener(queues = "#{liveQueue.name}", containerFactory = "liveListenerContainerFactory")
     public void onMessage(Message message) {
         String messageJson = new String(message.getBody(), StandardCharsets.UTF_8);
-        String messageId = readId(messageJson);
-        if (messageId == null) {
+        JsonNode root = readJson(messageJson);
+        if (root == null) {
+            return;
+        }
+        String messageId = readText(root, "id");
+        String roomText = readText(root, "roomId");
+        if (messageId == null || roomText == null) {
+            log.warn("Live-Nachricht ohne id oder roomId wird verworfen: {}", messageJson);
             return;
         }
         log.info("Live-Nachricht {} empfangen", messageId);
-        streamRegistry.sendToAll(messageId, messageJson);
+        UUID roomId = UUID.fromString(roomText);
+        streamRegistry.sendToRoom(roomId, messageId, messageJson);
     }
 
     /**
-     * Liest die id aus dem JSON. Ist das JSON kaputt oder fehlt die id, gibt sie null zurueck und
-     * schreibt eine Warnung. Eine kaputte Nachricht soll nicht den Listener anhalten.
+     * Liest den Text als JSON. Ist es kein JSON, gibt sie null zurueck und schreibt eine Warnung. Eine
+     * kaputte Nachricht soll den Listener nicht anhalten.
      */
-    private String readId(String messageJson) {
+    private JsonNode readJson(String messageJson) {
         try {
-            JsonNode root = objectMapper.readTree(messageJson);
-            JsonNode id = root.get("id");
-            if (id == null || id.isNull()) {
-                log.warn("Live-Nachricht ohne id wird verworfen: {}", messageJson);
-                return null;
-            }
-            return id.asText();
+            return objectMapper.readTree(messageJson);
         } catch (IOException brokenJson) {
             log.warn("Live-Nachricht ist kein JSON und wird verworfen: {}", messageJson);
             return null;
         }
+    }
+
+    /** Holt ein Feld als Text aus dem JSON, oder null, wenn es fehlt. */
+    private String readText(JsonNode root, String fieldName) {
+        JsonNode field = root.get(fieldName);
+        if (field == null || field.isNull()) {
+            return null;
+        }
+        return field.asText();
     }
 }

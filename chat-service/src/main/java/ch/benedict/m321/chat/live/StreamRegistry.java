@@ -3,6 +3,7 @@ package ch.benedict.m321.chat.live;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,8 +12,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
- * Die Liste aller offenen Streams dieser Instanz. Der Web-Thread traegt einen Stream ein, wenn sich
- * ein Client verbindet. Der Listener-Thread verteilt jede Live-Nachricht an alle eingetragenen Streams.
+ * Die Liste aller offenen Streams dieser Instanz, jeder mit seinem Raum. Der Web-Thread traegt einen
+ * Stream ein, wenn sich ein Client verbindet. Der Listener-Thread verteilt jede Live-Nachricht an die
+ * Streams, deren Raum zur roomId der Nachricht passt.
  *
  * Weil zwei verschiedene Threads die Liste gleichzeitig benutzen, laeuft jeder Zugriff auf sie unter
  * derselben Sperre (synchronized). Ohne die Sperre koennte der Listener die Liste lesen, waehrend ein
@@ -23,25 +25,32 @@ public class StreamRegistry {
 
     private static final Logger log = LoggerFactory.getLogger(StreamRegistry.class);
 
-    private final List<SseEmitter> streams = new ArrayList<>();
+    private final List<LiveStream> streams = new ArrayList<>();
 
     /**
-     * Traegt einen neuen Stream ein. Geht der Stream zu (Client schliesst, Fehler, Zeitlimit), traegt
-     * er sich ueber die drei Rueckrufe selbst wieder aus, damit die Liste nicht mit toten Streams waechst.
+     * Traegt einen neuen Stream fuer einen Raum ein. Geht der Stream zu (Client schliesst, Fehler,
+     * Zeitlimit), traegt er sich ueber die drei Rueckrufe selbst wieder aus, damit die Liste nicht mit
+     * toten Streams waechst.
      */
-    public void add(SseEmitter stream) {
-        stream.onCompletion(() -> remove(stream));
-        stream.onTimeout(() -> remove(stream));
-        stream.onError(problem -> remove(stream));
+    public void add(SseEmitter emitter, UUID roomId) {
+        emitter.onCompletion(() -> remove(emitter));
+        emitter.onTimeout(() -> remove(emitter));
+        emitter.onError(problem -> remove(emitter));
+        LiveStream stream = new LiveStream(emitter, roomId);
         synchronized (streams) {
             streams.add(stream);
         }
     }
 
-    /** Traegt einen Stream aus. Ist er schon weg, passiert nichts. */
-    public void remove(SseEmitter stream) {
+    /** Traegt den Stream mit diesem Emitter aus. Ist er schon weg, passiert nichts. */
+    public void remove(SseEmitter emitter) {
         synchronized (streams) {
-            streams.remove(stream);
+            for (int index = 0; index < streams.size(); index++) {
+                if (streams.get(index).emitter() == emitter) {
+                    streams.remove(index);
+                    return;
+                }
+            }
         }
     }
 
@@ -53,17 +62,22 @@ public class StreamRegistry {
     }
 
     /**
-     * Schickt eine Nachricht an alle offenen Streams: die id bei id:, das JSON unveraendert bei data:.
-     * Gesendet wird an eine Kopie der Liste. So haelt der Listener die Sperre nur kurz und blockiert
-     * keinen Web-Thread, waehrend er an viele Streams schreibt.
+     * Schickt eine Nachricht an alle offenen Streams ihres Raums: die id bei id:, das JSON unveraendert
+     * bei data:. Streams anderer Raeume bekommen sie nicht (Spec 2.1). Gesendet wird an eine Kopie der
+     * passenden Streams. So haelt der Listener die Sperre nur kurz und blockiert keinen Web-Thread,
+     * waehrend er an viele Streams schreibt.
      */
-    public void sendToAll(String messageId, String messageJson) {
-        List<SseEmitter> receivers;
+    public void sendToRoom(UUID roomId, String messageId, String messageJson) {
+        List<SseEmitter> receivers = new ArrayList<>();
         synchronized (streams) {
-            receivers = new ArrayList<>(streams);
+            for (LiveStream stream : streams) {
+                if (stream.roomId().equals(roomId)) {
+                    receivers.add(stream.emitter());
+                }
+            }
         }
-        for (SseEmitter stream : receivers) {
-            send(stream, messageId, messageJson);
+        for (SseEmitter receiver : receivers) {
+            send(receiver, messageId, messageJson);
         }
     }
 
