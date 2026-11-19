@@ -120,6 +120,10 @@ Korrigiert: nichts. Der Test mit zwei Instanzen braucht etwa 70 Sekunden, das la
 
 **Geprüft und korrigiert:**
 
+Geprüft: Die Queue hat x-max-length 1000 und x-overflow drop-head, und der Heartbeat ist auf 15 s eingestellt. Dass drop-head wirklich funktioniert, zeigt der Test, weil vorne die Nachricht 101 steht und nicht die 1. Mit reject-publish wären es auch 1000 Nachrichten, aber dann die Nachrichten 1 bis 1000. Eine Abweichung vom Plan gibt es: Den Inhalt der Queue liest der Test über die eigene Verbindung der Instanz. RabbitMQ lässt bei einer exklusiven Queue sonst niemanden lesen, auch die Management-API nicht. Die Argumente und den Heartbeat holt der Test aber wie geplant aus der API.
+
+Korrigiert: nichts.
+
 ## Schritt 6 — Streams beenden nach Neuverbindung
 
 **Ziel:** Wenn die Verbindung zu RabbitMQ abreisst und neu aufgebaut wird, beendet die Instanz alle offenen Streams. Queue und Bindung macht Spring selbst wieder.
