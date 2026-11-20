@@ -255,3 +255,9 @@ Der Text der Schritte oben bleibt unverändert. Jede Änderung steht hier mit ih
 **Was:** In Schritt 9 behandelt der Stream auch eine Datenbank, die beim Nachholen nicht erreichbar ist, wie eine unbekannte ID: Status 200, als erstes `event: reload`, danach läuft er live weiter.
 
 **Grund:** Wenn die Datenbank beim Nachholen nicht erreichbar ist, endet die Anfrage im Moment mit 500, und dann gibt EventSource auf. Das soll gleich enden wie bei einer unbekannten ID, also mit reload, und danach läuft der Stream live weiter. (Aus «Geprüft und korrigiert» bei Schritt 7. Passt zu Spec 2.5: «Nur das Nachholen funktioniert in dieser Zeit nicht.»)
+
+### Änderung 3 — zu Schritt 8: eine Sekunde warten vor dem Lesen
+
+**Was:** Beim Nachholen meldet sich der Stream zuerst an (Warteliste eingeschaltet), wartet dann eine Sekunde und liest erst danach die Datenbank. Die Sperre ist während dem Warten nicht gehalten.
+
+**Grund:** Auch mit der Warteliste war der Test noch rot. Nachrichten, die kurz vor dem Anmelden live gekommen sind, waren beim Lesen noch nicht in der Datenbank, weil der batch-writer bis zu 200 ms braucht. Darum wartet der Stream nach dem Anmelden eine Sekunde, bevor er liest. Was vorher gekommen ist, ist dann schon gespeichert, und was danach kommt, landet in der Warteliste.
