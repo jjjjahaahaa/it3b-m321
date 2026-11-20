@@ -67,7 +67,7 @@ listen() {
 
 # DATEI ABSENDER: die Texte dieses Absenders in der Reihenfolge ihrer Ankunft, mit Leerzeichen getrennt.
 texts_of() {
-    grep "\"sender\":\"$2\"" "$1" | grep -o '"text":"[^"]*"' | cut -d'"' -f4 | paste -sd' '
+    grep "\"sender\":\"$2\"" "$1" | grep -o '"text":"[^"]*"' | cut -d'"' -f4 | paste -sd' ' -
 }
 
 # Die Live-Queues: Name, wartende Nachrichten, Leser.
@@ -187,7 +187,7 @@ wait
 S3_A1=$(grep -c '^data:' "$WORK/a1.txt")
 S3_A2=$(grep -c '^data:' "$WORK/a2.txt")
 S3_B=$(grep -c '^data:' "$WORK/b.txt")
-S3_EXPECTED_ORDER=$(seq -s ' ' 1 200)
+S3_EXPECTED_ORDER=$(seq 1 200 | paste -sd' ' -)
 S3_ORDER_OK=0
 for file in a1 a2; do
     for sender in s3-a s3-b; do
@@ -318,7 +318,7 @@ wait $!
 S7_TEXTS=$(texts_of "$WORK/s7-2.txt" s7)
 S7_DOUBLES=$(sed -n 's/^id: *//p' "$WORK/s7-2.txt" | sort | uniq -d | wc -l | tr -d ' ')
 S7_LIVE=$(texts_of "$WORK/s7-2.txt" s7-live)
-S7_EXPECTED=$(seq -s ' ' 1 50)
+S7_EXPECTED=$(seq 1 50 | paste -sd' ' -)
 S7_TEXTS_SHORT="abweichend: $S7_TEXTS"
 if [ "$S7_TEXTS" = "$S7_EXPECTED" ]; then
     S7_TEXTS_SHORT="1 2 ... 50"
