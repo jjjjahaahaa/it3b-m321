@@ -2,16 +2,17 @@
 
 Diese Seite beschreibt, wie der heutige Stand auf einem Rechner zum Laufen kommt und woran man
 erkennt, dass er wirklich läuft. Sie ist die Ergänzung zu [`PLANUNG.md`](../PLANUNG.md), die das
-*Warum* beschreibt, zur [Spezifikation des batch-writer](spec-batch-writer.md) und zum
-[Umsetzungsplan](plan-batch-writer.md).
+*Warum* beschreibt, zu den Spezifikationen des [batch-writer](spec-batch-writer.md) und der
+[Live-Zustellung](spec-live-zustellung.md) und zu den Umsetzungsplänen
+([batch-writer](plan-batch-writer.md), [Live-Zustellung](plan-live-zustellung.md)).
 
 ## Was läuft
 
 | Dienst | Aufgabe |
 |---|---|
 | `postgres` | speichert die Nachrichten. Schema und drei Demo-Nachrichten beim ersten Start |
-| `rabbitmq` | Message Queue. Exchange `chat.messages`, Queue `chat.persist`, Dead-Letter-Queue `chat.dlq` |
-| `chat-service` | nimmt Nachrichten an (`POST /api/messages`) und liest den Verlauf (`GET /api/messages`) |
+| `rabbitmq` | Message Queue. Exchange `chat.messages`, Queue `chat.persist`, Dead-Letter-Queue `chat.dlq`, dazu eine Live-Queue `chat.live.<uuid>` pro Instanz des `chat-service` |
+| `chat-service` | nimmt Nachrichten an (`POST /api/messages`), liest den Verlauf (`GET /api/messages`) und schickt neue Nachrichten live (`GET /stream`). Darf mehrfach laufen |
 | `batch-writer` | holt die Nachrichten aus `chat.persist` und schreibt sie gebündelt in PostgreSQL |
 | Gateway, Keycloak, Web-UI, Desktop-UI | **fehlen noch** |
 
@@ -77,12 +78,73 @@ liest sie automatisch, sie ist in `.gitignore` und kommt nicht ins Repository.
 
 ### Alle Szenarien auf einmal
 
-`scripts/abnahme.sh` stellt die acht Szenarien aus der Spezifikation nach (S2 bis S8, mit
-`--mit-tests` auch S1) und schreibt zu jedem den gemessenen neben den erwarteten Wert:
+`scripts/abnahme.sh` stellt die acht Szenarien aus der Spezifikation des batch-writer nach (S2 bis S8,
+mit `--mit-tests` auch S1) und schreibt zu jedem den gemessenen neben den erwarteten Wert:
 
 ```bash
 scripts/abnahme.sh
 ```
+
+`scripts/abnahme-live.sh` macht dasselbe für die Live-Zustellung: S1 bis S8 und Z1, Z2 aus
+[Abschnitt 4 der Spezifikation](spec-live-zustellung.md). Es startet den Stack selbst mit zwei
+Instanzen, klont für S2 den Fork frisch in einen temporären Ordner und hält für S6 eine Instanz an.
+Bei jedem Szenario steht `OK` oder `FEHLER`, der Exit-Code ist nur bei allen `OK` gleich 0. Es dauert
+etwa 20 Minuten, die meiste Zeit brauchen `mvn clean test` (S1) und der frische Klon (S2):
+
+```bash
+cp .env.example .env
+scripts/abnahme-live.sh
+```
+
+## Zwei Instanzen des chat-service
+
+```bash
+docker compose up -d --scale chat-service=2
+docker compose ps chat-service
+docker compose exec rabbitmq rabbitmqctl list_queues name messages_ready consumers
+```
+
+Jede Instanz legt beim Start ihre eigene Queue `chat.live.<uuid>` an und hängt sie an den Exchange
+`chat.messages`. So bekommt jede Instanz jede Nachricht, egal über welche sie gesendet wurde. Die Queue
+ist exklusiv: hört die Verbindung der Instanz auf (Heartbeat 15 Sekunden), löscht RabbitMQ sie. Darin
+warten höchstens 1000 Nachrichten, bei mehr fliegt die älteste raus. Weil `docker-compose.yml` keinen
+`container_name` setzt, kann Compose beliebig viele Instanzen starten. Eine einzelne Instanz spricht man
+mit `docker exec <container-id> …` an, die IDs zeigt `docker compose ps -q chat-service`.
+
+## Live mitlesen: `GET /stream`
+
+Ein Stream bleibt offen und bekommt jede neue Nachricht seines Raums als Server-Sent Event. Von innen,
+zum Beispiel für 30 Sekunden:
+
+```bash
+docker compose exec chat-service curl -sN --max-time 30 "http://localhost:8080/stream?roomId=11111111-1111-1111-1111-111111111111"
+```
+
+In einem zweiten Terminal eine Nachricht senden (siehe oben), und sie erscheint so:
+
+```text
+id:3c9a2f1e-7b4d-4e8a-9f21-5d6c8b0a1e47
+data:{"id":"3c9a2f1e-…","roomId":"11111111-…","sender":"lernende1","text":"Hallo","sentAt":"…"}
+
+```
+
+`id:` ist die ID der Nachricht, `data:` dasselbe JSON, das auch in `chat.persist` liegt. Spring lässt nach
+dem Doppelpunkt das Leerzeichen weg, für SSE ist das dasselbe.
+
+**Nachholen.** Verbindet sich ein Browser neu, schickt er die letzte gesehene ID als Kopfzeile
+`Last-Event-ID` mit. Der Stream meldet sich dann zuerst für Live-Nachrichten an (sie warten in einer
+Warteliste), wartet eine Sekunde, holt das Verpasste aus der Datenbank und schickt danach die Warteliste
+ohne die Nachrichten, die schon nachgeholt sind. So fehlt nichts und nichts kommt doppelt. Von Hand:
+
+```bash
+docker compose exec chat-service curl -sN --max-time 10 -H "Last-Event-ID: <letzte id>" "http://localhost:8080/stream?roomId=11111111-1111-1111-1111-111111111111"
+```
+
+**Unbekannte ID.** Findet der Stream die ID auch beim zweiten Suchen nicht, gehört sie zu einem anderen
+Raum oder ist die Datenbank nicht erreichbar, antwortet er trotzdem mit 200. Das erste Ereignis ist dann
+`event: reload` mit `data: {"reason":"unknown-last-event-id"}`, danach läuft der Stream live weiter. Der
+Client lädt den Verlauf mit `GET /api/messages` neu. Ein Fehlerstatus wäre falsch: `EventSource` im Browser
+gibt dann auf und verbindet sich nicht mehr neu.
 
 ## Mehr als ein Schreiber
 
@@ -111,6 +173,15 @@ trotzdem gespeichert. `chat.dlq` in der Liste oben zeigt, ob etwas ausgesondert 
 **Schreiber stoppen.** `docker compose stop batch-writer`: die Nachrichten sammeln sich in der Queue und
 werden nach `docker compose start batch-writer` in wenigen Paketen geschrieben.
 
+**Live ohne Datenbank.** Auch wenn `postgres` und `batch-writer` gestoppt sind, kommen neue Nachrichten
+an jedem offenen Stream an. Der Live-Weg braucht keine Datenbank. Nur das Nachholen geht in dieser Zeit
+nicht, ein Client mit `Last-Event-ID` bekommt nach etwa drei Sekunden `event: reload`.
+
+**Instanz anhalten.** `docker pause <container-id>` friert eine Instanz ein. Nach etwa 15 Sekunden ohne
+Heartbeat schliesst RabbitMQ ihre Verbindung und löscht ihre Live-Queue. Nach `docker unpause` verbindet
+sie sich neu, legt die Queue wieder an und beendet ihre offenen Streams, damit die Clients neu verbinden
+und das Verpasste nachholen.
+
 ## Aufräumen
 
 Container anhalten, Daten behalten (Datenbank **und** Queue-Inhalt bleiben):
@@ -134,9 +205,15 @@ nach ein paar Sekunden noch nicht da: `docker compose logs batch-writer` zeigt, 
 **`docker compose ps` zeigt `5432/tcp` bei `postgres`.** Das ist kein veröffentlichter Port. Er wäre mit
 `0.0.0.0:5432->5432/tcp` angegeben. Ein Pfeil (`->`) heisst «vom Rechner aus erreichbar».
 
-**Die Tests brauchen Docker, aber keinen laufenden Stack.** `mvn clean test` startet für die Tests des
-`batch-writer` eigene Container mit PostgreSQL und RabbitMQ (Testcontainers) auf zufälligen Ports.
-Sie stören den Stack nicht. Ohne laufendes Docker schlagen sie mit einer klaren Meldung fehl.
+**Die Tests brauchen Docker, aber keinen laufenden Stack.** `mvn clean test` startet für die Tests von
+`batch-writer` und `chat-service` eigene Container mit PostgreSQL und RabbitMQ (Testcontainers) auf
+zufälligen Ports. Sie stören den Stack nicht. Ohne laufendes Docker schlagen sie mit einer klaren Meldung
+fehl. Die Tests des `chat-service` dauern einige Minuten, weil mehrere davon eigene Instanzen starten und
+der Test für «nichts doppelt» 20 Mal läuft.
+
+**`curl` auf `/stream` zeigt lange gar nichts, nicht einmal Kopfzeilen.** Spring schickt die Kopfzeilen
+erst zusammen mit dem ersten Ereignis. Solange im Raum niemand etwas sendet, sieht man nichts. Das ist
+kein Fehler.
 
 **Schemaänderungen wirken nicht.** Die Skripte in `db/` führt das Postgres-Image nur beim
 allerersten Start auf ein leeres Volume aus. Danach hilft nur `docker compose down -v`, was alle
