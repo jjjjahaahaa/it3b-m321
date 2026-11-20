@@ -194,6 +194,10 @@ Korrigiert: nichts. Für Schritt 8 ist noch die Lücke zwischen Nachholen und An
 
 **Geprüft und korrigiert:**
 
+Geprüft: Vorher war der Test 20 von 20 Mal rot, auch mit der Warteliste, solange es die Pause noch nicht gab. Jetzt ist er 20 von 20 Mal grün. Das HashSet hat pro Durchlauf gut 150 doppelte Nachrichten weggelassen, die Überschneidung wurde also wirklich getestet. Solange ein Stream nachholt, schickt der Listener nichts selbst. Damit ist der offene Punkt aus Schritt 3 erledigt.
+
+Korrigiert: nichts. Es gibt aber zwei Grenzen. Wenn der batch-writer länger als eine Sekunde braucht, kann immer noch eine Nachricht fehlen. Ausserdem schickt finishCatchUp die ganze Warteliste, während es die Sperre hat, und hält dadurch den Listener kurz auf. Für Schritt 9 ist offen, ob es das zweite Suchen nach einer Sekunde aus Spec 2.4 neben der neuen Pause überhaupt noch braucht.
+
 ## Schritt 9 — Unbekannte ID
 
 **Ziel:** Wenn der Stream die ID auch nach einer Sekunde nicht findet oder wenn sie zu einem anderen Raum gehört, antwortet er trotzdem mit 200. Er schickt als erstes `reload`, schreibt eine Warnung ins Log und läuft live weiter.
