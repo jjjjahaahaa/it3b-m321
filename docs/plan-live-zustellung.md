@@ -261,3 +261,9 @@ Der Text der Schritte oben bleibt unverändert. Jede Änderung steht hier mit ih
 **Was:** Beim Nachholen meldet sich der Stream zuerst an (Warteliste eingeschaltet), wartet dann eine Sekunde und liest erst danach die Datenbank. Die Sperre ist während dem Warten nicht gehalten.
 
 **Grund:** Auch mit der Warteliste war der Test noch rot. Nachrichten, die kurz vor dem Anmelden live gekommen sind, waren beim Lesen noch nicht in der Datenbank, weil der batch-writer bis zu 200 ms braucht. Darum wartet der Stream nach dem Anmelden eine Sekunde, bevor er liest. Was vorher gekommen ist, ist dann schon gespeichert, und was danach kommt, landet in der Warteliste.
+
+### Änderung 4 — zu Schritt 9: Datenbankverbindung wartet höchstens 2 Sekunden
+
+**Was:** In der `application.yml` vom chat-service steht `spring.datasource.hikari.connection-timeout: 2000`. Eine Abfrage wartet höchstens 2 Sekunden auf eine Verbindung zur Datenbank statt 30.
+
+**Grund:** Ohne Einstellung wartet eine Datenbankabfrage bis zu 30 Sekunden auf eine Verbindung. Wenn die Datenbank weg ist, würde ein Client beim Nachholen so lange gar keine Antwort bekommen. Darum habe ich connection-timeout jetzt auf 2 Sekunden gestellt. Das gilt für den ganzen chat-service, also auch für GET /api/messages. Wenn die Datenbank ausgefallen ist, kommt der Fehler dort jetzt nach 2 statt nach 30 Sekunden.
