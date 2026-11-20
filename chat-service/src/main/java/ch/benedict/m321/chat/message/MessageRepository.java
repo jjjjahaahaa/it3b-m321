@@ -57,14 +57,15 @@ public class MessageRepository {
     }
 
     /**
-     * Sucht den Sendezeitpunkt einer Nachricht. Gebraucht beim Nachholen: eine UUID laesst sich nicht
-     * sortieren, ihr sent_at schon. Gibt null zurueck, wenn es die Nachricht (noch) nicht gibt.
+     * Sucht den Sendezeitpunkt einer Nachricht in einem Raum. Gebraucht beim Nachholen: eine UUID laesst
+     * sich nicht sortieren, ihr sent_at schon. Gibt null zurueck, wenn es die Nachricht (noch) nicht gibt
+     * oder wenn sie zu einem anderen Raum gehoert. Beides heisst fuer das Nachholen: unbekannt (Spec 2.6).
      */
-    public Instant findSentAt(UUID messageId) {
-        String sql = "SELECT sent_at FROM message WHERE id = ?";
-        List<Timestamp> found = jdbcTemplate.queryForList(sql, Timestamp.class, messageId);
+    public Instant findSentAt(UUID messageId, UUID roomId) {
+        String sql = "SELECT sent_at FROM message WHERE id = ? AND room_id = ?";
+        List<Timestamp> found = jdbcTemplate.queryForList(sql, Timestamp.class, messageId, roomId);
         if (found.isEmpty()) {
-            log.debug("Nachricht {} nicht gefunden", messageId);
+            log.debug("Nachricht {} in Raum {} nicht gefunden", messageId, roomId);
             return null;
         }
         Timestamp sentAt = found.get(0);

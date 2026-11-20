@@ -1,5 +1,6 @@
 package ch.benedict.m321.chat.live;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -9,6 +10,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -90,6 +92,12 @@ public class StreamController {
         boolean reachable;
         try {
             reachable = sendMissedMessages(stream, roomId, lastEventId);
+        } catch (DataAccessException databaseProblem) {
+            // Plan, Aenderung 2: die Datenbank ist nicht erreichbar. Statt 500 (dann gaebe EventSource
+            // auf) bekommt der Client reload wie bei einer unbekannten ID und laeuft danach live weiter.
+            log.warn("Datenbank beim Nachholen fuer Raum {} nicht erreichbar, der Client bekommt reload: {}",
+                    roomId, databaseProblem.getMessage());
+            reachable = stream.sendReload();
         } catch (RuntimeException problem) {
             // Zum Beispiel ist die Datenbank nicht erreichbar. Der Stream ist schon angemeldet und wuerde
             // sonst fuer immer Nachrichten in seiner Warteliste sammeln. Deshalb zuerst wieder austragen.
@@ -105,9 +113,10 @@ public class StreamController {
     }
 
     /**
-     * Wartet WAIT_FOR_STORAGE_MILLIS. Gemessen in Schritt 8: ohne diese Pause fehlten Nachrichten, die
-     * vor dem Anmelden live durchkamen, aber beim Lesen noch nicht in der Tabelle standen. Gewartet wird
-     * ohne Sperre, der Listener legt neue Nachrichten in dieser Zeit einfach in die Warteliste.
+     * Wartet WAIT_FOR_STORAGE_MILLIS, damit der batch-writer Zeit zum Speichern hat. Gebraucht vor dem
+     * ersten Lesen (Schritt 8: ohne diese Pause fehlten Nachrichten, die vor dem Anmelden live durchkamen)
+     * und vor dem zweiten Suchen nach der Last-Event-ID (Schritt 9). Gewartet wird ohne Sperre, der
+     * Listener legt neue Nachrichten in dieser Zeit einfach in die Warteliste.
      */
     private void waitUntilStored() {
         try {
@@ -120,22 +129,25 @@ public class StreamController {
     }
 
     /**
-     * Schickt die Nachrichten, die der Client nach lastEventId verpasst hat, die aelteste zuerst. Ist
-     * lastEventId keine UUID, gilt sie als unbekannt, und es wird nichts nachgeholt.
-     * Die Datenbankabfrage laeuft ohne Sperre. Gesperrt wird der Stream nur kurz fuer jede einzelne
-     * Nachricht (sendCaughtUp). So wartet der Listener-Thread nie auf die Datenbank.
+     * Schickt die Nachrichten, die der Client nach lastEventId verpasst hat, die aelteste zuerst. Ist die
+     * ID auch beim zweiten Suchen unbekannt, gehoert sie zu einem anderen Raum oder ist sie gar keine
+     * UUID, kommt stattdessen reload (Spec 2.6). Die Antwort bleibt in jedem Fall 200.
+     * Die Datenbankabfragen laufen ohne Sperre. Gesperrt wird der Stream nur kurz fuer jedes einzelne
+     * Ereignis. So wartet der Listener-Thread nie auf die Datenbank.
      * Gibt false zurueck, wenn der Client unterdessen nicht mehr erreichbar ist.
      */
     private boolean sendMissedMessages(LiveStream stream, UUID roomId, String lastEventId) {
-        UUID lastMessageId;
-        try {
-            lastMessageId = UUID.fromString(lastEventId.trim());
-        } catch (IllegalArgumentException notAUuid) {
-            log.warn("Last-Event-ID {} ist keine UUID, es wird nichts nachgeholt", lastEventId);
-            return true;
+        UUID lastMessageId = parseId(lastEventId);
+        Instant sentAt = null;
+        if (lastMessageId != null) {
+            sentAt = findWithSecondAttempt(roomId, lastMessageId);
+        }
+        if (sentAt == null) {
+            log.warn("Last-Event-ID {} ist in Raum {} unbekannt, der Client bekommt reload", lastEventId, roomId);
+            return stream.sendReload();
         }
 
-        List<Message> missed = messageService.loadMissed(roomId, lastMessageId);
+        List<Message> missed = messageService.loadMissed(roomId, lastMessageId, sentAt);
         for (Message message : missed) {
             String messageJson = toJson(message);
             boolean reachable = stream.sendCaughtUp(message.id().toString(), messageJson);
@@ -145,6 +157,33 @@ public class StreamController {
         }
         log.info("{} Nachrichten fuer Raum {} nachgeholt", missed.size(), roomId);
         return true;
+    }
+
+    /**
+     * Liest die Last-Event-ID als UUID. Ist sie keine, kommt null zurueck, und sie gilt als unbekannt.
+     */
+    private UUID parseId(String lastEventId) {
+        try {
+            return UUID.fromString(lastEventId.trim());
+        } catch (IllegalArgumentException notAUuid) {
+            return null;
+        }
+    }
+
+    /**
+     * Sucht den Zeitpunkt der Nachricht mit der Last-Event-ID. Findet die Datenbank sie nicht, wird nach
+     * einer Sekunde nochmals gesucht (Spec 2.4): vielleicht hat der batch-writer sie noch nicht geschrieben.
+     * Gewartet wird ohne Sperre, Live-Nachrichten landen in dieser Zeit in der Warteliste.
+     * Gibt null zurueck, wenn sie auch beim zweiten Mal fehlt.
+     */
+    private Instant findWithSecondAttempt(UUID roomId, UUID lastMessageId) {
+        Instant sentAt = messageService.findSentAt(roomId, lastMessageId);
+        if (sentAt != null) {
+            return sentAt;
+        }
+        log.info("Last-Event-ID {} noch nicht gefunden, in einer Sekunde nochmals", lastMessageId);
+        waitUntilStored();
+        return messageService.findSentAt(roomId, lastMessageId);
     }
 
     /**

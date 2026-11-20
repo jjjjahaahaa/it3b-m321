@@ -1,7 +1,6 @@
 package ch.benedict.m321.chat.message;
 
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -42,16 +41,18 @@ public class MessageService {
     }
 
     /**
-     * Liefert die Nachrichten, die ein Client nach der Nachricht lastMessageId verpasst hat, die aelteste
-     * zuerst (Spec 2.4). Kennt die Datenbank diese Nachricht nicht, ist die Liste leer: dann laeuft der
-     * Stream einfach live weiter. Was in diesem Fall genauer passiert, regelt Schritt 9.
+     * Sucht, wann die Nachricht lastMessageId in diesem Raum gesendet wurde. Gibt null zurueck, wenn die
+     * Datenbank sie in diesem Raum nicht kennt. Was dann passiert, entscheidet der StreamController.
      */
-    public List<Message> loadMissed(UUID roomId, UUID lastMessageId) {
-        Instant sentAt = messageRepository.findSentAt(lastMessageId);
-        if (sentAt == null) {
-            log.info("Last-Event-ID {} ist unbekannt, es wird nichts nachgeholt", lastMessageId);
-            return new ArrayList<>();
-        }
+    public Instant findSentAt(UUID roomId, UUID lastMessageId) {
+        return messageRepository.findSentAt(lastMessageId, roomId);
+    }
+
+    /**
+     * Liefert die Nachrichten, die ein Client nach der Nachricht lastMessageId verpasst hat, die aelteste
+     * zuerst (Spec 2.4). sentAt ist der Zeitpunkt dieser Nachricht, gefunden mit findSentAt.
+     */
+    public List<Message> loadMissed(UUID roomId, UUID lastMessageId, Instant sentAt) {
         return messageRepository.findFromSentAt(roomId, sentAt, lastMessageId);
     }
 

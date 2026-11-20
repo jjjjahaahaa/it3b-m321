@@ -28,6 +28,9 @@ public class LiveStream {
 
     private static final Logger log = LoggerFactory.getLogger(LiveStream.class);
 
+    /** Das data: des reload-Ereignisses, genau so wie in Spec 2.6. */
+    private static final String RELOAD_DATA = "{\"reason\":\"unknown-last-event-id\"}";
+
     private final SseEmitter emitter;
     private final UUID roomId;
 
@@ -74,6 +77,18 @@ public class LiveStream {
     }
 
     /**
+     * Schickt das Ereignis reload (Spec 2.6): der Client weiss dann, dass ihm vielleicht etwas fehlt, und
+     * laedt den Verlauf neu. Es hat absichtlich keine id: sonst wuerde der Browser sie sich als letzte
+     * gesehene Nachricht merken. Gibt false zurueck, wenn der Client nicht mehr erreichbar ist.
+     */
+    public synchronized boolean sendReload() {
+        SseEmitter.SseEventBuilder event = SseEmitter.event()
+                .name("reload")
+                .data(RELOAD_DATA, MediaType.TEXT_PLAIN);
+        return sendEvent(event);
+    }
+
+    /**
      * Wird vom Listener fuer jede Live-Nachricht des Raums aufgerufen. Waehrend des Nachholens kommt die
      * Nachricht in die Warteliste, sonst geht sie direkt raus. Gibt false zurueck, wenn der Client nicht
      * mehr erreichbar ist.
@@ -116,7 +131,7 @@ public class LiveStream {
     }
 
     /**
-     * Schreibt ein einzelnes Ereignis: die id bei id:, das JSON unveraendert bei data:. Wird nur aus den
+     * Schreibt eine Nachricht: die id bei id:, das JSON unveraendert bei data:. Wird nur aus den
      * synchronized-Methoden oben aufgerufen, haelt die Sperre also schon. Gibt false zurueck, wenn der
      * Client nicht mehr erreichbar ist.
      */
@@ -124,6 +139,14 @@ public class LiveStream {
         SseEmitter.SseEventBuilder event = SseEmitter.event()
                 .id(messageId)
                 .data(messageJson, MediaType.TEXT_PLAIN);
+        return sendEvent(event);
+    }
+
+    /**
+     * Schreibt ein fertiges Ereignis in den Stream. Klappt das nicht, ist der Client weg, und es kommt
+     * false zurueck. Wer den Stream dann austraegt, entscheidet der Aufrufer.
+     */
+    private boolean sendEvent(SseEmitter.SseEventBuilder event) {
         try {
             emitter.send(event);
             return true;

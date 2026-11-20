@@ -12,6 +12,11 @@ spring:
     url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:chat}
     username: ${POSTGRES_USER:chat}
     password: ${POSTGRES_PASSWORD:chat}
+    hikari:
+      # So lange (in Millisekunden) wartet eine Abfrage hoechstens auf eine Verbindung zur Datenbank.
+      # Ohne Angabe waeren es 30 Sekunden. Ist die Datenbank weg, bekaeme ein Client beim Nachholen so
+      # lange gar keine Antwort. Mit 2 Sekunden kommt das reload schnell (Plan, Aenderung 2).
+      connection-timeout: 2000
 
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
