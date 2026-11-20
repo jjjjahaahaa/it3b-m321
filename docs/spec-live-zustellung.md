@@ -197,7 +197,7 @@ listen() {         # INSTANZ RAUM SEKUNDEN DATEI, läuft im Hintergrund
     docker exec "$1" curl -sN --max-time "$3" "http://localhost:8080/stream?roomId=$2" > "$4" &
 }
 texts_of() {       # DATEI ABSENDER: Texte dieses Absenders in Ankunftsreihenfolge
-    grep "\"sender\":\"$2\"" "$1" | grep -o '"text":"[^"]*"' | cut -d'"' -f4 | paste -sd' '
+    grep "\"sender\":\"$2\"" "$1" | grep -o '"text":"[^"]*"' | cut -d'"' -f4 | paste -sd' ' -
 }
 queues() {         # Live-Queues: Name, wartende Nachrichten, Leser
     docker compose exec -T rabbitmq rabbitmqctl -q list_queues name messages_ready consumers | grep '^chat\.live\.'
