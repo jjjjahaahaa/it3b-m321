@@ -218,6 +218,10 @@ Korrigiert: nichts. Es gibt aber zwei Grenzen. Wenn der batch-writer länger als
 
 **Geprüft und korrigiert:**
 
+Geprüft: Bevor es den Code gab, war der Test zweimal 4 von 4 Mal rot, und jetzt ist er grün. Folgende Fälle enden alle mit 200, dann event: reload und danach live: eine unbekannte ID, eine ID aus einem anderen Raum, eine ID, die gar keine UUID ist, und eine ausgefallene Datenbank. Das reload hat absichtlich kein id:, damit der Browser es sich nicht als letzte Nachricht merkt. Ich habe auch die Hikari-Zeile in der application.yml und die Stelle mit DataAccessException im StreamController gelesen. Beide passen zu dem, was die KI berichtet hat.
+
+Korrigiert: nichts. Der Test dauert jetzt 1,5 statt 0,5 s, weil seit Änderung 3 erst nach einer Sekunde gesucht wird. Eine Grenze gibt es: Bei einer wirklich unbekannten ID dauert es jetzt etwa zwei Sekunden, bis das reload kommt.
+
 ## Schritt 10 — Abnahmeskript und Doku
 
 **Ziel:** `scripts/abnahme-live.sh` macht S1 bis S8 und Z1, Z2 und schreibt den gemessenen Wert neben den erwarteten. Das README und `docs/betrieb.md` sind auf dem neusten Stand.
