@@ -12,12 +12,21 @@ spring:
     url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:chat}
     username: ${POSTGRES_USER:chat}
     password: ${POSTGRES_PASSWORD:chat}
+    hikari:
+      # So lange (in Millisekunden) wartet eine Abfrage hoechstens auf eine Verbindung zur Datenbank.
+      # Ohne Angabe waeren es 30 Sekunden. Ist die Datenbank weg, bekaeme ein Client beim Nachholen so
+      # lange gar keine Antwort. Mit 2 Sekunden kommt das reload schnell (Plan, Aenderung 2).
+      connection-timeout: 2000
 
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_DEFAULT_USER:chat}
     password: ${RABBITMQ_DEFAULT_PASS:chat}
+    # Heartbeat: Broker und Dienst schicken sich etwa alle 7,5 Sekunden ein Lebenszeichen. Fehlen zwei,
+    # gilt die Verbindung nach rund 15 Sekunden als tot. Der Broker schliesst sie dann, und mit ihr
+    # verschwindet die exklusive Live-Queue (Spec 2.3 und 3.2). Ohne Angabe waeren es 60 Sekunden.
+    requested-heartbeat: 15s
 
 # Swagger UI liegt unter http://localhost:8080/swagger-ui.html
 springdoc:

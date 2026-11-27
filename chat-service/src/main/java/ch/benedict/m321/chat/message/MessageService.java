@@ -23,6 +23,10 @@ public class MessageService {
     private final RabbitTemplate rabbitTemplate;
     private final MessageRepository messageRepository;
 
+    /**
+     * Spring reicht RabbitTemplate und Repository herein (Konstruktor-Injektion). So kann ein Test
+     * beide durch eigene Varianten ersetzen, ohne dass diese Klasse etwas davon merkt.
+     */
     public MessageService(RabbitTemplate rabbitTemplate, MessageRepository messageRepository) {
         this.rabbitTemplate = rabbitTemplate;
         this.messageRepository = messageRepository;
@@ -34,6 +38,22 @@ public class MessageService {
     public List<Message> loadHistory(UUID roomId, int limit) {
         log.debug("Verlauf angefordert: Raum {}, hoechstens {} Nachrichten", roomId, limit);
         return messageRepository.findLatest(roomId, limit);
+    }
+
+    /**
+     * Sucht, wann die Nachricht lastMessageId in diesem Raum gesendet wurde. Gibt null zurueck, wenn die
+     * Datenbank sie in diesem Raum nicht kennt. Was dann passiert, entscheidet der StreamController.
+     */
+    public Instant findSentAt(UUID roomId, UUID lastMessageId) {
+        return messageRepository.findSentAt(lastMessageId, roomId);
+    }
+
+    /**
+     * Liefert die Nachrichten, die ein Client nach der Nachricht lastMessageId verpasst hat, die aelteste
+     * zuerst (Spec 2.4). sentAt ist der Zeitpunkt dieser Nachricht, gefunden mit findSentAt.
+     */
+    public List<Message> loadMissed(UUID roomId, UUID lastMessageId, Instant sentAt) {
+        return messageRepository.findFromSentAt(roomId, sentAt, lastMessageId);
     }
 
     /**

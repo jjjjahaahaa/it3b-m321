@@ -1,0 +1,298 @@
+# Plan — Live-Zustellung
+
+Modul M321 · Klasse IT3b · Bewertung 2 · Jaro · Stand 19.11.2026
+
+Ich arbeite nach `docs/spec-live-zustellung.md`. Jeder Schritt hört mit einem grünen Test und einem eigenen Commit auf.
+
+## Schritt 1 — Testgrundlage und Regeltest
+
+**Ziel:** Die Tests im chat-service laufen gegen ein echtes RabbitMQ und eine echte PostgreSQL in Containern (Testcontainers). Dazu kommt ein `CommentRulesTest`, der den ganzen Code unter `chat-service/src` prüft.
+
+**Warum an dieser Stelle:** So ist die ganze Testgrundlage an einem Ort, und ab hier prüft der Regeltest jeden Schritt automatisch mit.
+
+**Auftrag an die KI (Wortlaut):**
+
+> «Lies zuerst docs/spec-live-zustellung.md und docs/plan-live-zustellung.md. Wir machen nur Schritt 1.
+>
+> Richte im chat-service die Testgrundlage mit Testcontainers ein: ein RabbitMQ-Container und ein PostgreSQL-Container, die alle Integrationstests zusammen benutzen. Nimm die gleichen Images wie in docker-compose.yml, bei RabbitMQ eins mit Management-Plugin, weil spätere Tests die Management-API brauchen. Das Schema für PostgreSQL soll aus der gleichen Quelle kommen wie im Stack, mach keine zweite Kopie davon. Schreib einen Test, der zeigt, dass beide Container laufen und chat.messages als Fanout-Exchange da ist.
+>
+> Dann übernimm den CommentRulesTest aus dem batch-writer für chat-service/src, mit den gleichen Regeln. Lass ihn zuerst laufen und zeig mir, dass er rot ist. Ich erwarte sechs Stellen: die Konstruktoren von MessageService und MessageController, contextLoads in ChatServiceApplicationTest und die drei Testmethoden in MessageControllerTest. Wenn es andere Stellen sind, hör auf und sag es mir. Danach schreib die fehlenden Kommentare, bis er grün ist.
+>
+> Das gilt für alle Schritte: Zuerst den Test, der rot ist, dann der Code. Keine Java-Streams im chat-service, Kommentare nach den Regeln vom CommentRulesTest. Nichts aus späteren Schritten vorwegnehmen. Am Schluss mvn clean test im Wurzelverzeichnis grün und ein Commit Schritt 1: Testgrundlage und Regeltest.»
+
+**Test:** Der `CommentRulesTest` ist zuerst rot, weil an sechs Stellen ein Kommentar fehlt (die Konstruktoren von `MessageService` und `MessageController`, `contextLoads` in `ChatServiceApplicationTest` und die drei Testmethoden in `MessageControllerTest`). Danach ist er grün. Ein weiterer Test zeigt, dass beide Container laufen und `chat.messages` als Fanout da ist. `mvn clean test` ist grün.
+
+**Geprüft und korrigiert:**
+
+Geprüft: Ich habe geschaut, ob es okay ist, dass die Tests ohne definitions.json laufen. Das ist richtig so, weil es sonst im Test auch chat.persist geben würde. Dort läuft kein batch-writer, also würden sich alle Testnachrichten darin sammeln. Ausserdem habe ich geprüft, ob die Test-Kontexte im Zwischenspeicher bleiben dürfen. Das geht, weil jeder Kontext seine eigene exklusive Live-Queue hat. Anders als in Bewertung 1 gibt es keine gemeinsame Queue.
+
+Korrigiert: nichts.
+
+## Schritt 2 — Live-Queue
+
+**Ziel:** Beim Start macht jede Instanz die Queue `chat.live.` plus eine UUID (`exclusive: true`, `durable: false`, an `chat.messages` gebunden). Ein Listener schreibt jede Nachricht ins Log.
+
+**Warum an dieser Stelle:** Ohne Queue kommt bei der Instanz gar nichts an. Weil der Listener zuerst nur ins Log schreibt, sehe ich, ob die Nachricht bis in die Instanz kommt, bevor überhaupt ein Client dran ist.
+
+**Auftrag an die KI (Wortlaut):**
+
+> «Schritt 2 aus docs/plan-live-zustellung.md: die Live-Queue.
+>
+> Beim Start erzeugt jede Instanz eine UUID mit UUID.randomUUID() und legt die Queue `chat.live.<uuid>` an, mit exclusive: true und durable: false, gebunden an chat.messages (Spec 3.1 und 3.2). Nicht den Hostnamen nehmen. Die Bindung kommt nicht in rabbitmq/definitions.json, weil der Name erst beim Start feststeht. Ein @RabbitListener auf dieser Queue schreibt vorerst nur die id jeder Nachricht ins Log. Er liest mit genau einem Thread (Spec 2.2). x-max-length und den Heartbeat noch nicht einbauen, die kommen in Schritt 5.
+>
+> Test: Nach dem Start zeigt die Management-API die Queue von dieser Instanz. Den Namen nimmst du aus der Instanz selbst und suchst nicht einfach nach chat.live.. Die Queue ist exklusiv, hängt an chat.messages und hat genau einen Leser. Prüf nicht, dass es nur eine Live-Queue gibt, weil Spring Test-Kontexte im Zwischenspeicher behält und jeder davon seine eigene Queue am gleichen Broker hat. Eine Nachricht über POST /api/messages steht danach mit ihrer id im Log (zum Beispiel mit OutputCaptureExtension).
+>
+> Zuerst den Test, der rot ist, dann der Code. Keine Java-Streams im chat-service, Kommentare nach den Regeln vom CommentRulesTest. Nichts aus späteren Schritten vorwegnehmen. Am Schluss mvn clean test im Wurzelverzeichnis grün und ein Commit Schritt 2: Live-Queue.»
+
+**Test:** Nach dem Start zeigt die Management-API die Queue von dieser Instanz. Sie ist exklusiv, hängt an `chat.messages` und hat einen Leser. Ich prüfe nicht «genau eine Queue», weil Spring Test-Kontexte im Zwischenspeicher behält und jeder seine eigene Queue hat. Wenn ich eine Nachricht über `POST /api/messages` schicke, steht sie mit ihrer id im Log.
+
+**Geprüft und korrigiert:**
+
+Geprüft: autoDelete = false passt zu Spec 3.2 und auch zum Test in Schritt 5. #{liveQueue.name} braucht es wirklich, und es hat einen Kommentar. Beim Message-Objekt muss ich in Schritt 3 aufpassen, dass bei data: genau das gleiche JSON steht wie in chat.persist.
+
+Korrigiert: nichts. In Schritt 3 lasse ich aber ChatServiceApplicationTest von IntegrationTest erben, damit im Log kein «Connection refused» mehr steht.
+
+## Schritt 3 — Stream-Endpunkt mit Test für zwei Instanzen
+
+**Ziel:** `GET /stream?roomId=...` antwortet mit `text/event-stream`, bleibt offen und schickt jede Nachricht als Ereignis mit `id:` und `data:` an alle offenen Streams.
+
+**Warum an dieser Stelle:** Jetzt kommt die Nachricht von der Instanz bis zum Client. Erst ab hier kann ein Test an einem Stream sehen, ob eine Nachricht ankommt. Darum gehört der Test mit zwei Instanzen hierher.
+
+**Auftrag an die KI (Wortlaut):**
+
+> «Schritt 3: der Stream-Endpunkt mit dem Test für zwei Instanzen.
+>
+> Bau GET /stream?roomId=... mit SseEmitter. Die Antwort hat Content-Type: text/event-stream und bleibt offen, ohne Timeout, bis der Client sie schliesst. Der Listener aus Schritt 2 schickt jetzt jede Nachricht an alle offenen Streams dieser Instanz, mit der Nachrichten-id bei id: und dem JSON bei data: (Format wie in Spec 1.3). Fehlt roomId, kommt 400. Der Endpunkt darf die Datenbank nicht brauchen, also auch nicht prüfen, ob es den Raum gibt (Spec 2.5). Streams, die zugehen oder abbrechen, fliegen aus der Liste. Nach Raum filtern kommt erst in Schritt 4, hier bekommen alle Streams alles.
+>
+> Test: Starte im Test den chat-service zweimal am gleichen RabbitMQ und an der gleichen Datenbank, jeden auf einem eigenen Zufallsport (zum Beispiel mit SpringApplicationBuilder). Die Instanz, die du im Test selbst startest, machst du am Ende vom Test wieder zu. Öffne an beiden einen Stream, schick eine Nachricht über A, und beide Streams müssen sie mit der gleichen id bekommen. Prüf dazu den Content-Type, das Format mit id:, data: und Leerzeile (Z1) und die 400 ohne roomId.
+>
+> Zuerst den Test, der rot ist, dann der Code. Keine Java-Streams im chat-service, Kommentare nach den Regeln vom CommentRulesTest. Nichts aus späteren Schritten vorwegnehmen. Am Schluss mvn clean test im Wurzelverzeichnis grün und ein Commit Schritt 3: Stream-Endpunkt.»
+
+**Test:** Der Test startet den chat-service zweimal am gleichen RabbitMQ, macht an beiden Instanzen einen Stream auf und schickt eine Nachricht über Instanz A. Beide Streams bekommen sie mit der gleichen id. Dazu prüfe ich den Content-Type, das Format vom Ereignis mit der Leerzeile (Z1) und dass ohne `roomId` ein 400 kommt.
+
+**Geprüft und korrigiert:**
+
+Geprüft: Bei data: steht genau das gleiche JSON wie in chat.persist, und beide Instanzen bekommen die gleiche Nachricht. Unterwegs gab es drei Fehler, die schon behoben sind: der Konverter hat __TypeId__ abgelehnt, der Port 8080 war doppelt belegt und ein Test ist hängen geblieben.
+
+Korrigiert: nichts. Für Schritt 4 ist noch offen, dass der Stream seine roomId noch nicht speichert. Für Schritt 8 ist offen, dass sendToAll noch ohne Sperre sendet.
+
+## Schritt 4 — Raumfilter
+
+**Ziel:** Ein Stream bekommt nur die Nachrichten, bei denen die `roomId` zu seinem Raum passt.
+
+**Warum an dieser Stelle:** Der Filter braucht die Liste mit den offenen Streams aus Schritt 3. Danach ist der Normalfall fertig.
+
+**Auftrag an die KI (Wortlaut):**
+
+> «Schritt 4: der Raumfilter.
+>
+> Ein Stream bekommt nur Nachrichten, deren roomId zu seinem Raum passt (Spec 1.3 und 2.1). Der Vergleich passiert im chat-service beim Verteilen an die Streams. Die Live-Queue bekommt weiterhin alle Nachrichten.
+>
+> Test: Bau den Zwei-Instanzen-Test aus Schritt 3 zu S3 aus. An jeder Instanz ein Stream in Raum A, an A dazu einer in Raum B. Raum B legst du im Test in der Datenbank an. Zwei Threads senden gleichzeitig je 200 Nachrichten in Raum A, einer über A als Absender s3-a, einer über B als s3-b, mit den Texten 1 bis 200. Jeder Thread schickt die nächste erst, wenn die 202 für die vorherige da ist (Spec 2.2). Erwartet: Beide Streams in Raum A haben 400 Ereignisse, der in Raum B hat 0, und pro Absender kommen die Texte in beiden Streams als 1 bis 200 an.
+>
+> Zuerst den Test, der rot ist, dann der Code. Keine Java-Streams im chat-service, Kommentare nach den Regeln vom CommentRulesTest. Nichts aus späteren Schritten vorwegnehmen. Am Schluss mvn clean test im Wurzelverzeichnis grün und ein Commit Schritt 4: Raumfilter.»
+
+**Test:** Ich baue den Test mit zwei Instanzen zu S3 aus: An jeder Instanz ist ein Stream in Raum A, dazu kommt noch einer in Raum B. Dann gehen 200 Nachrichten über A und 200 über B in Raum A. Beide Streams in Raum A müssen 400 haben, der in Raum B 0, und bei jedem Absender muss die Reihenfolge stimmen.
+
+**Geprüft und korrigiert:**
+
+Geprüft: Zuerst war der Test rot, weil der Stream in Raum B auch die Nachrichten aus Raum A bekommen hat. Mit dem Filter ist er grün. Ob ein Stream eine Nachricht bekommt, wird in sendToRoom mit stream.roomId().equals(roomId) entschieden. Die roomId kommt aus dem JSON, weil der Routing-Key leer ist.
+
+Korrigiert: nichts. Der Test mit zwei Instanzen braucht etwa 70 Sekunden, das lasse ich vorerst so.
+
+## Schritt 5 — Grenze und Heartbeat
+
+**Ziel:** Die Live-Queue hat `x-max-length: 1000` und `x-overflow: drop-head`, und der chat-service will einen Heartbeat von 15 Sekunden.
+
+**Warum an dieser Stelle:** Der Normalfall läuft, jetzt kommen die Fehlerfälle. Diese zwei sind nur Einstellungen, dafür braucht es keinen eigenen Code.
+
+**Auftrag an die KI (Wortlaut):**
+
+> «Schritt 5: Grenze und Heartbeat.
+>
+> Die Live-Queue bekommt x-max-length: 1000 und x-overflow: drop-head (Spec 3.3). In application.yml kommt spring.rabbitmq.requested-heartbeat: 15s (Spec 2.3 und 3.2). Sonst kein neuer Code.
+>
+> Test: Die Management-API zeigt an der Queue von dieser Instanz beide Argumente und an der Verbindung vom chat-service einen Heartbeat (timeout) von 15 Sekunden. Dann stoppst du den Listener über die RabbitListenerEndpointRegistry, publizierst mit RabbitTemplate 1100 Nachrichten mit den Texten 1 bis 1100 direkt an chat.messages und prüfst: In der Queue warten genau 1000, und die vorderste hat den Text 101. Das zweite zeigt, dass wirklich die ältesten rausfliegen und nicht die neuen abgelehnt werden. Am Schluss den Listener wieder starten, damit andere Tests nichts davon merken.
+>
+> Zuerst den Test, der rot ist, dann der Code. Keine Java-Streams im chat-service, Kommentare nach den Regeln vom CommentRulesTest. Nichts aus späteren Schritten vorwegnehmen. Am Schluss mvn clean test im Wurzelverzeichnis grün und ein Commit Schritt 5: Grenze und Heartbeat.»
+
+**Test:** Die Management-API zeigt an der Live-Queue beide Argumente und an der Verbindung einen Heartbeat von 15 s. Wenn der Listener gestoppt ist und 1100 Nachrichten kommen, warten in der Queue genau 1000, und die vorderste ist die 101. Erst daran sieht man, dass wirklich die ältesten rausfliegen.
+
+**Geprüft und korrigiert:**
+
+Geprüft: Die Queue hat x-max-length 1000 und x-overflow drop-head, und der Heartbeat ist auf 15 s eingestellt. Dass drop-head wirklich funktioniert, zeigt der Test, weil vorne die Nachricht 101 steht und nicht die 1. Mit reject-publish wären es auch 1000 Nachrichten, aber dann die Nachrichten 1 bis 1000. Eine Abweichung vom Plan gibt es: Den Inhalt der Queue liest der Test über die eigene Verbindung der Instanz. RabbitMQ lässt bei einer exklusiven Queue sonst niemanden lesen, auch die Management-API nicht. Die Argumente und den Heartbeat holt der Test aber wie geplant aus der API.
+
+Korrigiert: nichts.
+
+## Schritt 6 — Streams beenden nach Neuverbindung
+
+**Ziel:** Wenn die Verbindung zu RabbitMQ abreisst und neu aufgebaut wird, beendet die Instanz alle offenen Streams. Queue und Bindung macht Spring selbst wieder.
+
+**Warum an dieser Stelle:** Das ist das Verhalten aus S6, und dafür braucht es eigene Logik. Es baut auf der Liste mit den offenen Streams aus Schritt 3 und auf dem Heartbeat aus Schritt 5 auf.
+
+**Auftrag an die KI (Wortlaut):**
+
+> «Schritt 6: Streams beenden nach einer Neuverbindung.
+>
+> Wenn die Verbindung zu RabbitMQ weg war und neu aufgebaut wird, beendet die Instanz alle offenen Streams mit complete(). Dann verbinden sich die Clients neu und holen mit Last-Event-ID nach, was sie verpasst haben (Spec 2.3). Mach das mit einem ConnectionListener an der ConnectionFactory: Beim ersten onCreate nach dem Start passiert nichts, bei jedem weiteren werden alle Streams beendet. Die Streams erst nach der Neuverbindung beenden und nicht schon beim Abbruch, damit die neue Live-Queue schon da ist, wenn die Clients zurückkommen. Queue und Bindung legt Spring selbst neu an, dafür keinen eigenen Code schreiben.
+>
+> Test: Öffne einen Stream und schliess dann die Verbindung der Instanz über die Management-API (DELETE /api/connections/{name}). Erwartet: Der Stream endet, nach der Neuverbindung gibt es die Queue von dieser Instanz wieder, mit genau einem Leser, und ein neuer Stream bekommt eine neue Nachricht.
+>
+> Zuerst den Test, der rot ist, dann der Code. Keine Java-Streams im chat-service, Kommentare nach den Regeln vom CommentRulesTest. Nichts aus späteren Schritten vorwegnehmen. Am Schluss mvn clean test im Wurzelverzeichnis grün und ein Commit Schritt 6: Streams beenden nach Neuverbindung.»
+
+**Test:** Der Test macht die Verbindung von der Instanz über die Management-API zu. Danach muss der offene Stream zu sein, und nach der Neuverbindung gibt es die Queue von dieser Instanz wieder, mit einem Leser, und sie stellt eine neue Nachricht zu.
+
+**Geprüft und korrigiert:**
+
+Geprüft: Wenn der Broker die Verbindung trennt, beendet ReconnectStreamCloser.onCreate() alle Streams, aber nicht bei der ersten Verbindung beim Start. Genau so läuft es in S6 nach docker unpause ab. In den Tests gab es zwei Fehler, die jetzt behoben sind. Der neue Test war zuerst fälschlicherweise grün, weil der Stream noch keine Kopfzeilen hatte. Jetzt kommt zuerst eine Nachricht und erst dann wird getrennt, und so war der Test richtig rot. Ausserdem hat der Test mit zwei Instanzen zu früh gesendet, weil ein alter Stream noch mitgezählt wurde.
+
+Korrigiert: nichts. Dass die Tests langsam herunterfahren, lasse ich so.
+
+## Schritt 7 — Nachholen
+
+**Ziel:** Wenn `Last-Event-ID` mitkommt, sucht der Stream das `sent_at` von dieser Nachricht. Dann schickt er zuerst alle Nachrichten im gleichen Raum mit gleichem oder späterem `sent_at`, die älteste zuerst, aber ohne die Nachricht selbst.
+
+**Warum an dieser Stelle:** Fürs Nachholen braucht es den fertigen Stream und den Raumfilter. Weil noch keine Live-Nachrichten gleichzeitig dazukommen, sieht man Fehler in der Abfrage für sich allein.
+
+**Auftrag an die KI (Wortlaut):**
+
+> «Schritt 7: Nachholen.
+>
+> Kommt beim GET /stream der Header Last-Event-ID mit, sucht der Dienst in der Tabelle message das sent_at dieser Nachricht. Dann schickt er zuerst alle Nachrichten im gleichen Raum mit gleichem oder späterem sent_at, die älteste zuerst, ohne die Nachricht mit dieser ID selbst (Spec 2.4). Danach läuft der Stream live weiter. Lies mit dem gleichen Datenbankzugriff wie beim Verlauf und änder das Schema nicht. Ohne den Header greift der Stream nicht auf die Datenbank zu. Die Warteliste gegen doppelte IDs (Schritt 8) und reload mit dem zweiten Versuch nach einer Sekunde (Schritt 9) kommen noch nicht hier rein. Bei einer unbekannten ID läuft der Stream vorerst einfach live weiter.
+>
+> Im Test läuft kein batch-writer. Häng darum im Testcode eine eigene Queue an chat.messages mit einem Listener, der jede Nachricht so in die Tabelle schreibt wie der batch-writer. Das gehört nur in den Testcode, nicht in den chat-service.
+>
+> Test: Stream öffnen, eine Nachricht empfangen und ihre id merken, Stream schliessen, 50 Nachrichten senden und warten, bis alle in der Tabelle sind, dann mit Last-Event-ID neu verbinden. Erwartet: genau die 50 in der richtigen Reihenfolge. Zweiter Test: zwei Nachrichten mit genau gleichem sent_at direkt in die Tabelle schreiben, mit der ersten als Last-Event-ID verbinden, und die zweite muss ankommen. Dritter Test (S5): mit einem eigenen PostgreSQL-Container, der gestoppt wird, damit die anderen Tests nichts merken. Ein Stream ohne Header geht trotzdem auf und bekommt eine Nachricht über POST /api/messages. Wenn POST ohne Datenbank nicht geht, sag es mir, weil S5 das verlangt.
+>
+> Zuerst den Test, der rot ist, dann der Code. Keine Java-Streams im chat-service, Kommentare nach den Regeln vom CommentRulesTest. Nichts aus späteren Schritten vorwegnehmen. Am Schluss mvn clean test im Wurzelverzeichnis grün und ein Commit Schritt 7: Nachholen.»
+
+**Test:** Eine Nachricht empfangen, trennen, 50 senden und mit `Last-Event-ID` neu verbinden: Es müssen genau die 50 in der richtigen Reihenfolge kommen. Zwei Nachrichten mit dem gleichen `sent_at` kommen beide an. Ein Stream ohne Header geht auch, wenn PostgreSQL gestoppt ist (S5). Weil im Test kein batch-writer läuft, schreibt ein Listener im Testcode die Nachrichten in die Tabelle.
+
+**Geprüft und korrigiert:**
+
+Geprüft: Wenn Last-Event-ID mitkommt, holt findFromSentAt alle Nachrichten mit sent_at >= und id <>, die älteste zuerst. Damit sind auch zwei Nachrichten mit dem gleichen sent_at abgedeckt. Ohne den Header läuft der Stream auch ohne Datenbank (S5). Bei nachgeholten Nachrichten hat sentAt nur 6 statt 9 Nachkommastellen, weil die Datenbank nur Mikrosekunden speichert. Das lasse ich so.
+
+Korrigiert: nichts. Für Schritt 8 ist noch die Lücke zwischen Nachholen und Anmelden offen. Für Schritt 9 ist offen: Wenn die Datenbank beim Nachholen nicht erreichbar ist, endet die Anfrage im Moment mit 500, und dann gibt EventSource auf. Das soll gleich enden wie bei einer unbekannten ID, also mit reload, und danach läuft der Stream live weiter. Dazu kommt noch das zweite Suchen nach einer Sekunde aus Spec 2.4.
+
+## Schritt 8 — Nichts doppelt
+
+**Ziel:** Während dem Nachholen kommen die Live-Nachrichten in eine Warteliste. Danach wird die Warteliste geschickt, aber ohne die IDs, die schon im `HashSet` sind. Das Ganze ist mit `synchronized` geschützt, aber die Sperre gilt nur zum Umschalten und zum Senden, nicht während der Datenbankabfrage.
+
+**Warum an dieser Stelle:** Das ist der einzige Teil, wo zwei Threads gleichzeitig arbeiten. Weil das Nachholen schon läuft, weiss ich bei einem Fehler, dass er von der Gleichzeitigkeit kommt.
+
+**Auftrag an die KI (Wortlaut):**
+
+> «Schritt 8: nichts doppelt.
+>
+> Bau das Nachholen so um, wie es in Spec 2.4 steht: Zuerst meldet sich der Stream für Live-Nachrichten an, aber die kommen in eine Warteliste statt direkt raus. Dann schickt er die Nachrichten aus der Datenbank und merkt sich ihre IDs in einem HashSet. Zum Schluss schickt er die Warteliste ohne die IDs, die schon im Set sind, und ab dann geht alles direkt raus. Nicht andersrum (zuerst lesen, dann anmelden), sonst kann eine Nachricht genau dazwischen fallen. Der Web-Thread und der RabbitMQ-Listener greifen gleichzeitig auf den Stream zu, schütz das mit synchronized auf dem Stream-Objekt. Die Sperre gilt aber nur kurz: beim Einschalten der Warteliste, beim Senden und beim Ausschalten der Warteliste. Während der Datenbankabfrage hält der Web-Thread sie nicht. Es gibt nur einen Listener-Thread für alle Streams, und wenn der warten muss, bekommen auch alle anderen Clients nichts mehr.
+>
+> Test: Wie der erste Test aus Schritt 7, aber während dem Neuverbinden schickt ein zweiter Thread laufend weitere Nachrichten als Absender live. Erwartet: zuerst die 50 in der richtigen Reihenfolge, danach alle Live-Nachrichten, keine ID doppelt und keine fehlt (S7). Lass den Test mehrmals laufen (zum Beispiel @RepeatedTest(20)), weil so ein Fehler nicht jedes Mal kommt.
+>
+> Zuerst den Test, der rot ist, dann der Code. Keine Java-Streams im chat-service, Kommentare nach den Regeln vom CommentRulesTest. Nichts aus späteren Schritten vorwegnehmen. Am Schluss mvn clean test im Wurzelverzeichnis grün und ein Commit Schritt 8: Nichts doppelt.»
+
+**Test:** Wie in Schritt 7, aber während dem Neuverbinden kommen live noch weitere Nachrichten. Zuerst müssen die 50 in der richtigen Reihenfolge kommen, danach die Live-Nachrichten, und keine ID darf doppelt sein. Damit ist S7 ganz abgedeckt.
+
+**Geprüft und korrigiert:**
+
+Geprüft: Vorher war der Test 20 von 20 Mal rot, auch mit der Warteliste, solange es die Pause noch nicht gab. Jetzt ist er 20 von 20 Mal grün. Das HashSet hat pro Durchlauf gut 150 doppelte Nachrichten weggelassen, die Überschneidung wurde also wirklich getestet. Solange ein Stream nachholt, schickt der Listener nichts selbst. Damit ist der offene Punkt aus Schritt 3 erledigt.
+
+Korrigiert: nichts. Es gibt aber zwei Grenzen. Wenn der batch-writer länger als eine Sekunde braucht, kann immer noch eine Nachricht fehlen. Ausserdem schickt finishCatchUp die ganze Warteliste, während es die Sperre hat, und hält dadurch den Listener kurz auf. Für Schritt 9 ist offen, ob es das zweite Suchen nach einer Sekunde aus Spec 2.4 neben der neuen Pause überhaupt noch braucht.
+
+## Schritt 9 — Unbekannte ID
+
+**Ziel:** Wenn der Stream die ID auch nach einer Sekunde nicht findet oder wenn sie zu einem anderen Raum gehört, antwortet er trotzdem mit 200. Er schickt als erstes `reload`, schreibt eine Warnung ins Log und läuft live weiter.
+
+**Warum an dieser Stelle:** Das ist ein Sonderfall vom Nachholen und macht erst Sinn, wenn das Nachholen funktioniert.
+
+**Auftrag an die KI (Wortlaut):**
+
+> «Schritt 9: unbekannte ID.
+>
+> Findet der Stream die Last-Event-ID nicht, sucht er nach einer Sekunde nochmals, weil der batch-writer die Nachricht vielleicht noch nicht geschrieben hat. Findet er sie dann immer noch nicht, oder gehört sie zu einem anderen Raum, antwortet er trotzdem mit 200, schickt als erstes event: reload mit data: {"reason":"unknown-last-event-id"}, schreibt eine Warnung ins Log und läuft live weiter (Spec 2.6). Keinen Fehlerstatus schicken, sonst gibt EventSource auf. Während der Sekunde Warten und der zweiten Abfrage hält der Web-Thread die Sperre vom Stream nicht, sonst steht der Listener-Thread und alle anderen Clients bekommen nichts mehr. Live-Nachrichten kommen in dieser Zeit in die Warteliste aus Schritt 8.
+>
+> Test: Mit Last-Event-ID: 00000000-0000-0000-0000-000000000000 verbinden. Erwartet: Status 200, erstes Ereignis event: reload, danach kommt eine Live-Nachricht an (Z2). Zweiter Test: Eine Nachricht, die erst nach einer halben Sekunde in der Tabelle landet, wird beim zweiten Versuch gefunden und normal nachgeholt.
+>
+> Zuerst den Test, der rot ist, dann der Code. Keine Java-Streams im chat-service, Kommentare nach den Regeln vom CommentRulesTest. Nichts aus späteren Schritten vorwegnehmen. Am Schluss mvn clean test im Wurzelverzeichnis grün und ein Commit Schritt 9: Unbekannte ID.»
+
+**Test:** Mit `Last-Event-ID: 00000000-0000-0000-0000-000000000000` verbinden: Der Status ist 200, das erste Ereignis ist `event: reload`, und danach kommt eine Live-Nachricht an (Z2).
+
+**Geprüft und korrigiert:**
+
+Geprüft: Bevor es den Code gab, war der Test zweimal 4 von 4 Mal rot, und jetzt ist er grün. Folgende Fälle enden alle mit 200, dann event: reload und danach live: eine unbekannte ID, eine ID aus einem anderen Raum, eine ID, die gar keine UUID ist, und eine ausgefallene Datenbank. Das reload hat absichtlich kein id:, damit der Browser es sich nicht als letzte Nachricht merkt. Ich habe auch die Hikari-Zeile in der application.yml und die Stelle mit DataAccessException im StreamController gelesen. Beide passen zu dem, was die KI berichtet hat.
+
+Korrigiert: nichts. Der Test dauert jetzt 1,5 statt 0,5 s, weil seit Änderung 3 erst nach einer Sekunde gesucht wird. Eine Grenze gibt es: Bei einer wirklich unbekannten ID dauert es jetzt etwa zwei Sekunden, bis das reload kommt.
+
+## Schritt 10 — Abnahmeskript und Doku
+
+**Ziel:** `scripts/abnahme-live.sh` macht S1 bis S8 und Z1, Z2 und schreibt den gemessenen Wert neben den erwarteten. Das README und `docs/betrieb.md` sind auf dem neusten Stand.
+
+**Warum an dieser Stelle:** Die Szenarien kann man erst am fertigen Stack richtig messen, so wie in Bewertung 1.
+
+**Auftrag an die KI (Wortlaut):**
+
+> «Schritt 10: Abnahmeskript und Doku.
+>
+> Schreib scripts/abnahme-live.sh. Es führt S1 bis S8 und Z1, Z2 genau so aus, wie sie in Spec Abschnitt 4 stehen, mit den Hilfsfunktionen von dort. Bei jedem Szenario schreibt es den gemessenen Wert neben den erwarteten und dazu OK oder FEHLER. Am Schluss kommt eine Zusammenfassung, und der Exit-Code ist nur 0, wenn alles bestanden ist. Bau es auf wie scripts/abnahme.sh aus Bewertung 1, aber änder das alte Skript nicht. S2 läuft in einem frischen Klon in einem temporären Ordner. Nach S4 startet das Skript den Stack wieder mit zwei Instanzen und bestimmt A und B neu. Wenn ein Befehl aus der Spec nicht so funktioniert wie beschrieben, änder nicht einfach den erwarteten Wert, sondern sag es mir.
+>
+> Dann führ das README und docs/betrieb.md nach: wie man den Stack mit zwei Instanzen startet, was /stream macht und wie man das Skript laufen lässt.
+>
+> Lass das Skript einmal auf einem frischen Klon laufen und gib mir die ganze Ausgabe, damit ich die Messwerte am Ende vom Plan eintragen kann. Commit Schritt 10: Abnahmeskript und Doku.»
+
+**Test:** Das Skript läuft auf einem frischen Klon durch, und alle Szenarien bestehen. Die Messwerte stehen am Ende von diesem Plan.
+
+**Geprüft und korrigiert:**
+
+Geprüft: Das Skript ist auf einem frischen Klon durchgelaufen, und alle zehn Szenarien sind bestanden (Messwerte am Ende vom Plan). Bei S4 wartet es 30 Sekunden, weil die Live-Queue `exclusive` ist und mit der Verbindung der Instanz gelöscht wird. Bei einem normalen Stopp passiert das sofort, im schlimmsten Fall nach 15 Sekunden über den Heartbeat. `send_many` wartet bei jedem curl auf die Antwort. Würde man alle gleichzeitig schicken, kämen die Nachrichten in zufälliger Reihenfolge an, und S3 wäre FEHLER, obwohl der chat-service keinen Fehler hat. Die Reihenfolge pro Absender ist nur garantiert, wenn der Absender auf die Antwort wartet. Bei S6 kommt die Grenze 1000 von `x-max-length: 1000`, und wegen `x-overflow: drop-head` fliegt bei der 1001. Nachricht die älteste raus.
+
+Korrigiert: nichts. Der erste Lauf in der Cloud-Umgebung ist gescheitert, aber nicht wegen dem Code: Docker Hub hat Downloads abgelehnt (`429 Too Many Requests`), und der Build-Container hat dem Zertifikat vom Netz der Sitzung nicht vertraut. Das wurde nur in dieser Umgebung umgangen, das Repository ist unverändert.
+
+---
+
+## Änderungen am Plan
+
+Der Text der Schritte oben bleibt unverändert. Jede Änderung steht hier mit ihrem Grund.
+
+### Änderung 1 — zu Schritt 3: `ChatServiceApplicationTest` erbt von `IntegrationTest`
+
+**Was:** In Schritt 3 erbt `ChatServiceApplicationTest` zusätzlich von `IntegrationTest`.
+
+**Grund:** In Schritt 3 lasse ich aber ChatServiceApplicationTest von IntegrationTest erben, damit im Log kein «Connection refused» mehr steht. (Seit Schritt 2 startet in diesem Test der Live-Listener, findet aber kein RabbitMQ unter localhost, siehe «Geprüft und korrigiert» bei Schritt 2.)
+
+### Änderung 2 — zu Schritt 9: Datenbank beim Nachholen nicht erreichbar
+
+**Was:** In Schritt 9 behandelt der Stream auch eine Datenbank, die beim Nachholen nicht erreichbar ist, wie eine unbekannte ID: Status 200, als erstes `event: reload`, danach läuft er live weiter.
+
+**Grund:** Wenn die Datenbank beim Nachholen nicht erreichbar ist, endet die Anfrage im Moment mit 500, und dann gibt EventSource auf. Das soll gleich enden wie bei einer unbekannten ID, also mit reload, und danach läuft der Stream live weiter. (Aus «Geprüft und korrigiert» bei Schritt 7. Passt zu Spec 2.5: «Nur das Nachholen funktioniert in dieser Zeit nicht.»)
+
+### Änderung 3 — zu Schritt 8: eine Sekunde warten vor dem Lesen
+
+**Was:** Beim Nachholen meldet sich der Stream zuerst an (Warteliste eingeschaltet), wartet dann eine Sekunde und liest erst danach die Datenbank. Die Sperre ist während dem Warten nicht gehalten.
+
+**Grund:** Auch mit der Warteliste war der Test noch rot. Nachrichten, die kurz vor dem Anmelden live gekommen sind, waren beim Lesen noch nicht in der Datenbank, weil der batch-writer bis zu 200 ms braucht. Darum wartet der Stream nach dem Anmelden eine Sekunde, bevor er liest. Was vorher gekommen ist, ist dann schon gespeichert, und was danach kommt, landet in der Warteliste.
+
+### Änderung 4 — zu Schritt 9: Datenbankverbindung wartet höchstens 2 Sekunden
+
+**Was:** In der `application.yml` vom chat-service steht `spring.datasource.hikari.connection-timeout: 2000`. Eine Abfrage wartet höchstens 2 Sekunden auf eine Verbindung zur Datenbank statt 30.
+
+**Grund:** Ohne Einstellung wartet eine Datenbankabfrage bis zu 30 Sekunden auf eine Verbindung. Wenn die Datenbank weg ist, würde ein Client beim Nachholen so lange gar keine Antwort bekommen. Darum habe ich connection-timeout jetzt auf 2 Sekunden gestellt. Das gilt für den ganzen chat-service, also auch für GET /api/messages. Wenn die Datenbank ausgefallen ist, kommt der Fehler dort jetzt nach 2 statt nach 30 Sekunden.
+
+---
+
+## Messwerte
+
+Gemessen am 27.11.2026 mit `scripts/abnahme-live.sh` auf dem Stack aus `.env.example`, in einer Docker-Umgebung ohne feste Ports (Docker 29.9.3). S2 lief in einem frischen Klon vom Branch. Die Basis-Images kamen in dieser Umgebung von `mirror.gcr.io` statt von Docker Hub, und das Maven-Image hatte zusätzlich die Zertifikate vom Netz der Sitzung. Dockerfiles, Compose und Code sind unverändert.
+
+| Nr | Szenario | Gemessen | Erwartet | |
+|---|---|---|---|---|
+| S1 | `mvn clean test` im Wurzelverzeichnis | BUILD SUCCESS, 77 Tests, 0 Fehler | ein Lauf, alles grün | ✓ |
+| S2 | frischer Klon startet, kein Port veröffentlicht | `batch-writer`, `chat-service`, `postgres`, `rabbitmq` laufen, 0 Zeilen mit `->` | alle vier laufen, keine Zeile mit `->` | ✓ |
+| S3 | Raum und Reihenfolge, 2 × 200 Nachrichten über zwei Instanzen | `a1.txt`: 400, `a2.txt`: 400, `b.txt`: 0, Reihenfolge 1 bis 200 stimmt 4 von 4 Mal | 400, 400, 0, alle 4 Mal 1 2 … 200 | ✓ |
+| S4 | Queue verschwindet mit der Instanz | vorher 2 Live-Queues mit je 1 Leser, danach 1 | vorher 2 mit je 1 Leser, danach 1 | ✓ |
+| S5 | Live ohne `batch-writer` und Datenbank, 100 Nachrichten | 100 am Stream nach 5 s, 100 in der Tabelle 5 s nach dem Start | 100 am Stream, 100 in der Tabelle nach höchstens 90 s | ✓ |
+| S6 | Instanz A angehalten, 5000 Nachrichten über B | grösster Wert 1000, 5000 beim Client an B, danach 2 Live-Queues mit je 1 Leser, 1 beim Client an A | höchstens 1000, 5000, 2 mit je 1 Leser, 1 | ✓ |
+| S7 | Nachholen mit `Last-Event-ID`, 50 verpasste Nachrichten | 1 2 … 50, 0 doppelt, danach live: `danach` | 1 2 … 50, 0 doppelt, `danach` | ✓ |
+| S8 | Regeln im Quelltext | 0 Stream-Treffer, `CommentRulesTest` grün, `git ls-files .env` leer | keine Treffer, Test grün, leere Ausgabe | ✓ |
+| Z1 | Format des Ereignisses | curl Exit 28, `Content-Type: text/event-stream`, ein Ereignis mit `id:` und `data:`, danach eine Leerzeile | 28, `text/event-stream`, `id:` und `data:`, Leerzeile | ✓ |
+| Z2 | unbekannte `Last-Event-ID` | Status 200, erstes Ereignis `event:reload` | Status 200, zuerst `event: reload` | ✓ |
+
+Zum grössten Wert 1000 in S6: Das Skript hält nur den grössten Wert über alle Live-Queues fest, nicht, welche Queue ihn hatte. Weil alle 5000 beim Client an B angekommen sind, hat die Queue von B nichts weggeworfen. Die 1000 passt darum zur Queue der angehaltenen Instanz A, die bis an die Grenze vollläuft, bis RabbitMQ sie nach dem Heartbeat löscht.

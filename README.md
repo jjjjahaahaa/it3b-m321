@@ -46,8 +46,15 @@ erreichbar.
   über die man beim ersten Mal fällt.
 - [`docs/spec-batch-writer.md`](docs/spec-batch-writer.md) — Spezifikation des `batch-writer`
   (Bewertung 1): Vertrag der Queue, Verhalten in jedem Fehlerfall, Datenmodell, Abnahmekriterien.
+- [`docs/erklaerung-batch-writer.md`](docs/erklaerung-batch-writer.md) — der Code erklärt: Weg einer
+  Nachricht, welche Stelle welches Szenario entscheidet, Fragen und Antworten fürs Code-Review.
 - [`docs/plan-batch-writer.md`](docs/plan-batch-writer.md) — der Umsetzungsplan dazu, Aufgabe für
   Aufgabe, mit den gemessenen Werten am Ende.
+- [`docs/spec-live-zustellung.md`](docs/spec-live-zustellung.md) — Spezifikation der Live-Zustellung
+  (Bewertung 2): `GET /stream`, eine Live-Queue pro Instanz, Nachholen mit `Last-Event-ID`,
+  Abnahmekriterien.
+- [`docs/plan-live-zustellung.md`](docs/plan-live-zustellung.md) — der Umsetzungsplan dazu in zehn
+  Schritten, mit den Änderungen am Plan und ihren Gründen.
 - [`CLAUDE.md`](CLAUDE.md) — Codestil-Regeln für dieses Projekt. Gelten auch für dich.
 - `docs/skizze-architektur.heic` — die Handskizze aus dem Unterricht, von der die Planung ausgeht.
 
@@ -65,9 +72,10 @@ Die vollständigen Regeln stehen in [`CLAUDE.md`](CLAUDE.md).
 
 ## Stand
 
-Der **Bootstrap** und der **batch-writer** (Bewertung 1) sind abgeschlossen. Es laufen vier Dienste im
-`docker compose`: `postgres`, `rabbitmq`, `chat-service` und `batch-writer`. Kein Dienst veröffentlicht
-einen Port.
+Der **Bootstrap**, der **batch-writer** (Bewertung 1) und die **Live-Zustellung** (Bewertung 2) sind
+abgeschlossen. Es laufen vier Dienste im `docker compose`: `postgres`, `rabbitmq`, `chat-service` und
+`batch-writer`. Kein Dienst veröffentlicht einen Port. Vom `chat-service` dürfen mehrere Instanzen laufen
+(`docker compose up -d --scale chat-service=2`), jede bekommt jede Nachricht über ihre eigene Live-Queue.
 
 | Aufgabe | Stand |
 |---|---|
@@ -78,15 +86,23 @@ einen Port.
 | batch-writer — Eltern-POM, Broker-Topologie, Parser, Schreiben in einer Transaktion | fertig |
 | batch-writer — Listener, Bündeln mit Zeitlimit, kaputte Nachrichten, Datenbankausfall | fertig |
 | batch-writer — Compose-Stack, `.env.example`, Abnahmeskript, Regeltests | fertig |
-| Raumverwaltung, Keycloak, Live-Kanal (SSE), Gateway, Weboberfläche | offen |
+| Live-Zustellung — `GET /stream` (SSE), Live-Queue pro Instanz, Raumfilter | fertig |
+| Live-Zustellung — Grenze 1000 und Heartbeat, Streams beenden nach Neuverbindung | fertig |
+| Live-Zustellung — Nachholen mit `Last-Event-ID`, nichts doppelt, unbekannte ID mit `reload` | fertig |
+| Live-Zustellung — Abnahmeskript `scripts/abnahme-live.sh` | fertig |
+| Raumverwaltung, Keycloak, Gateway, Weboberfläche | offen |
 
 Wie man den Stand startet und prüft, steht in [`docs/betrieb.md`](docs/betrieb.md). Die Testläufe
-(`mvn clean test`, 37 Tests) brauchen Docker, aber keinen laufenden Stack.
+(`mvn clean test`, 77 Tests) brauchen Docker, aber keinen laufenden Stack.
+
+**Live mitlesen:** `GET /stream?roomId=…` hält die Antwort offen und schickt jede neue Nachricht des Raums
+als Server-Sent Event (`id:` ist die Nachrichten-ID, `data:` das JSON). Verbindet sich ein Client mit
+`Last-Event-ID` neu, holt der Stream das Verpasste aus der Datenbank nach. Ist die ID unbekannt, kommt
+zuerst `event: reload`, und der Client lädt den Verlauf neu.
 
 **Wichtig zum Verständnis:** eine gesendete Nachricht landet im Broker und wird kurz danach vom
 `batch-writer` in die Datenbank geschrieben, bis zu 200 ms später. Der `chat-service` publiziert nur,
 geschrieben wird ausschliesslich vom `batch-writer`. Sie erscheint darum erst mit kleiner Verzögerung im
 Verlauf.
 
-Danach folgen, in dieser Reihenfolge: Raumverwaltung, Keycloak, der Live-Kanal für neue
-Nachrichten, zuletzt Gateway und Weboberfläche.
+Danach folgen, in dieser Reihenfolge: Raumverwaltung, Keycloak, zuletzt Gateway und Weboberfläche.

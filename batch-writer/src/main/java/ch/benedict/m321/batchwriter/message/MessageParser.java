@@ -16,6 +16,9 @@ import org.springframework.stereotype.Component;
  * __TypeId__ vertrauen, der eine Klasse des chat-service nennt, die es hier nicht gibt. Ausserdem
  * setzt niemand diesen Header, der eine Nachricht von Hand in die Queue legt. So liest der Parser
  * nur den Koerper und meldet bei jedem Fehler genau, welches Feld nicht stimmt.
+ *
+ * Szenario S5 haengt auch an dieser Klasse: die Pruefung legt die Nachricht nur mit dem Header
+ * content_type in die Queue. Weil hier kein Header gelesen wird, ist das egal.
  */
 @Component
 public class MessageParser {
@@ -27,6 +30,8 @@ public class MessageParser {
      * etwas nicht stimmt. Unbekannte Zusatzfelder werden nicht beachtet.
      */
     public IncomingMessage parse(byte[] body) {
+        // JsonNode ist ein Baum aus dem JSON-Text: man fragt ihn Feld fuer Feld ab, statt das JSON
+        // automatisch in eine Klasse giessen zu lassen. So sieht man jede Pruefung einzeln.
         JsonNode root = readJsonObject(body);
 
         UUID id = readUuid(root, "id");

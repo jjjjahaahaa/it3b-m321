@@ -35,6 +35,7 @@ class MessageControllerTest {
     @MockitoBean
     private MessageService messageService;
 
+    /** GET /api/messages muss die Nachrichten aus dem Service unveraendert als JSON-Liste zurueckgeben. */
     @Test
     void historyReturnsMessagesAsJson() throws Exception {
         // Die Attrappe soll genau eine Nachricht zurueckgeben.
@@ -52,6 +53,10 @@ class MessageControllerTest {
                 .andExpect(jsonPath("$[0].text").value("Willkommen im Raum Allgemein."));
     }
 
+    /**
+     * POST /api/messages muss mit 202 antworten, nicht mit 201: die Nachricht ist angenommen und
+     * weitergegeben, aber noch nicht gespeichert.
+     */
     @Test
     void sendAcceptsMessageAndReturns202() throws Exception {
         Message created = new Message(
@@ -80,6 +85,7 @@ class MessageControllerTest {
                 .andExpect(jsonPath("$.text").value("Hallo zusammen"));
     }
 
+    /** Ein Text aus lauter Leerzeichen ist keine Nachricht und wird mit 400 abgelehnt, bevor etwas publiziert wird. */
     @Test
     void sendRejectsBlankText() throws Exception {
         String body = """
