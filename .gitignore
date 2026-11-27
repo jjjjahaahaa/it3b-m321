@@ -17,3 +17,7 @@ out/
 
 # Eigene Anpassungen fuer den Rechner, zum Beispiel veroeffentlichte Ports zum Ausprobieren
 docker-compose.override.yml
+
+# grill-me: Sitzung mit Token und lokale Protokolle gehoeren nicht ins Repository
+.grill/
+docs/grill-protokoll-*.md
