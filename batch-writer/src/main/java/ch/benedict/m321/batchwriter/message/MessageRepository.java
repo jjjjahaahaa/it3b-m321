@@ -24,6 +24,7 @@ public class MessageRepository {
     private static final Logger log = LoggerFactory.getLogger(MessageRepository.class);
 
     /**
+     * Szenario S5 entscheidet sich in dieser Zeile.
      * ON CONFLICT (id) DO NOTHING macht das Schreiben wiederholbar: kommt dieselbe Nachricht ein
      * zweites Mal (nach einem Absturz oder weil sie doppelt gesendet wurde), wird sie einfach
      * uebersprungen. Die Datenbank entscheidet das atomar ueber den Primaerschluessel.
@@ -50,6 +51,9 @@ public class MessageRepository {
             return;
         }
 
+        // try-with-resources: die Verbindung geht am Ende automatisch zurueck in den Pool, auch bei einem Fehler.
+        // Ist die Datenbank weg (Szenario S7), scheitert schon getConnection(). Der Fehler landet unten
+        // in translate() und wird zu DatabaseUnavailableException: der Listener wartet dann.
         try (Connection connection = dataSource.getConnection()) {
             writeInOneTransaction(connection, messages);
         } catch (SQLException problem) {
@@ -67,11 +71,15 @@ public class MessageRepository {
         connection.setAutoCommit(false);
 
         try (PreparedStatement statement = connection.prepareStatement(INSERT_SQL)) {
+            // addBatch() merkt sich die Werte nur, es geht noch nichts zur Datenbank.
             for (IncomingMessage message : messages) {
                 fillParameters(statement, message);
                 statement.addBatch();
             }
+            // executeBatch() schickt alle gesammelten Zeilen auf einmal. Wegen reWriteBatchedInserts in
+            // der JDBC-Adresse macht der Treiber daraus EINEN INSERT mit vielen Wertegruppen.
             statement.executeBatch();
+            // Erst commit() macht die Zeilen fuer alle sichtbar und dauerhaft.
             connection.commit();
         } catch (SQLException problem) {
             rollbackQuietly(connection);
@@ -104,6 +112,9 @@ public class MessageRepository {
      * warten wir und verlieren nichts.
      */
     private RuntimeException translate(SQLException problem) {
+        // SQLSTATE ist ein fuenfstelliger Fehlercode, den jede SQL-Datenbank gleich verwendet. Die ersten
+        // zwei Zeichen sind die Klasse. Beispiele: 22001 Text zu lang, 23503 Raum unbekannt (Fremdschluessel),
+        // 08001 keine Verbindung, 57P01 Datenbank wird heruntergefahren.
         String sqlState = findSqlState(problem);
         boolean rowIsBroken = sqlState != null && (sqlState.startsWith("22") || sqlState.startsWith("23"));
 

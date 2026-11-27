@@ -57,6 +57,39 @@ public class MessageRepository {
     }
 
     /**
+     * Sucht den Sendezeitpunkt einer Nachricht in einem Raum. Gebraucht beim Nachholen: eine UUID laesst
+     * sich nicht sortieren, ihr sent_at schon. Gibt null zurueck, wenn es die Nachricht (noch) nicht gibt
+     * oder wenn sie zu einem anderen Raum gehoert. Beides heisst fuer das Nachholen: unbekannt (Spec 2.6).
+     */
+    public Instant findSentAt(UUID messageId, UUID roomId) {
+        String sql = "SELECT sent_at FROM message WHERE id = ? AND room_id = ?";
+        List<Timestamp> found = jdbcTemplate.queryForList(sql, Timestamp.class, messageId, roomId);
+        if (found.isEmpty()) {
+            log.debug("Nachricht {} in Raum {} nicht gefunden", messageId, roomId);
+            return null;
+        }
+        Timestamp sentAt = found.get(0);
+        return sentAt.toInstant();
+    }
+
+    /**
+     * Holt alle Nachrichten eines Raums ab einem Zeitpunkt, die aelteste zuerst, ohne die eine Nachricht,
+     * ab der nachgeholt wird (Spec 2.4). "Gleich oder spaeter" (>=) und nicht nur "spaeter": die Datenbank
+     * speichert nur Mikrosekunden, zwei Nachrichten koennen also dasselbe sent_at haben.
+     */
+    public List<Message> findFromSentAt(UUID roomId, Instant sentAt, UUID excludedId) {
+        String sql = "SELECT id, room_id, sender, text, sent_at "
+                   + "FROM message "
+                   + "WHERE room_id = ? AND sent_at >= ? AND id <> ? "
+                   + "ORDER BY sent_at ASC";
+
+        List<Message> found = jdbcTemplate.query(sql, this::mapRow, roomId, Timestamp.from(sentAt), excludedId);
+
+        log.debug("{} Nachrichten in Raum {} ab {} gefunden", found.size(), roomId, sentAt);
+        return found;
+    }
+
+    /**
      * Uebertraegt eine Ergebniszeile der Datenbank in ein Message-Objekt.
      * Diese Methode wird oben pro gefundener Zeile einmal aufgerufen.
      */

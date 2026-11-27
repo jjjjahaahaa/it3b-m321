@@ -36,6 +36,10 @@ public class MessageController {
 
     private final MessageService messageService;
 
+    /**
+     * Spring reicht den MessageService herein (Konstruktor-Injektion). Der Controller kennt nur ihn,
+     * nicht die Datenbank und nicht RabbitMQ.
+     */
     public MessageController(MessageService messageService) {
         this.messageService = messageService;
     }
