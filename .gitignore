@@ -11,3 +11,5 @@ out/
 
 # Browser-Automation
 .playwright-mcp/
+.grill/
+docs/grill-protokoll-*.md
