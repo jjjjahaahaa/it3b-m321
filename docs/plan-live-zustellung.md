@@ -242,6 +242,10 @@ Korrigiert: nichts. Der Test dauert jetzt 1,5 statt 0,5 s, weil seit Änderung 3
 
 **Geprüft und korrigiert:**
 
+Geprüft: Das Skript ist auf einem frischen Klon durchgelaufen, und alle zehn Szenarien sind bestanden (Messwerte am Ende vom Plan). Bei S4 wartet es 30 Sekunden, weil die Live-Queue `exclusive` ist und mit der Verbindung der Instanz gelöscht wird. Bei einem normalen Stopp passiert das sofort, im schlimmsten Fall nach 15 Sekunden über den Heartbeat. `send_many` wartet bei jedem curl auf die Antwort. Würde man alle gleichzeitig schicken, kämen die Nachrichten in zufälliger Reihenfolge an, und S3 wäre FEHLER, obwohl der chat-service keinen Fehler hat. Die Reihenfolge pro Absender ist nur garantiert, wenn der Absender auf die Antwort wartet. Bei S6 kommt die Grenze 1000 von `x-max-length: 1000`, und wegen `x-overflow: drop-head` fliegt bei der 1001. Nachricht die älteste raus.
+
+Korrigiert: nichts. Der erste Lauf in der Cloud-Umgebung ist gescheitert, aber nicht wegen dem Code: Docker Hub hat Downloads abgelehnt (`429 Too Many Requests`), und der Build-Container hat dem Zertifikat vom Netz der Sitzung nicht vertraut. Das wurde nur in dieser Umgebung umgangen, das Repository ist unverändert.
+
 ---
 
 ## Änderungen am Plan
@@ -271,3 +275,24 @@ Der Text der Schritte oben bleibt unverändert. Jede Änderung steht hier mit ih
 **Was:** In der `application.yml` vom chat-service steht `spring.datasource.hikari.connection-timeout: 2000`. Eine Abfrage wartet höchstens 2 Sekunden auf eine Verbindung zur Datenbank statt 30.
 
 **Grund:** Ohne Einstellung wartet eine Datenbankabfrage bis zu 30 Sekunden auf eine Verbindung. Wenn die Datenbank weg ist, würde ein Client beim Nachholen so lange gar keine Antwort bekommen. Darum habe ich connection-timeout jetzt auf 2 Sekunden gestellt. Das gilt für den ganzen chat-service, also auch für GET /api/messages. Wenn die Datenbank ausgefallen ist, kommt der Fehler dort jetzt nach 2 statt nach 30 Sekunden.
+
+---
+
+## Messwerte
+
+Gemessen am 27.11.2026 mit `scripts/abnahme-live.sh` auf dem Stack aus `.env.example`, in einer Docker-Umgebung ohne feste Ports (Docker 29.9.3). S2 lief in einem frischen Klon vom Branch. Die Basis-Images kamen in dieser Umgebung von `mirror.gcr.io` statt von Docker Hub, und das Maven-Image hatte zusätzlich die Zertifikate vom Netz der Sitzung. Dockerfiles, Compose und Code sind unverändert.
+
+| Nr | Szenario | Gemessen | Erwartet | |
+|---|---|---|---|---|
+| S1 | `mvn clean test` im Wurzelverzeichnis | BUILD SUCCESS, 77 Tests, 0 Fehler | ein Lauf, alles grün | ✓ |
+| S2 | frischer Klon startet, kein Port veröffentlicht | `batch-writer`, `chat-service`, `postgres`, `rabbitmq` laufen, 0 Zeilen mit `->` | alle vier laufen, keine Zeile mit `->` | ✓ |
+| S3 | Raum und Reihenfolge, 2 × 200 Nachrichten über zwei Instanzen | `a1.txt`: 400, `a2.txt`: 400, `b.txt`: 0, Reihenfolge 1 bis 200 stimmt 4 von 4 Mal | 400, 400, 0, alle 4 Mal 1 2 … 200 | ✓ |
+| S4 | Queue verschwindet mit der Instanz | vorher 2 Live-Queues mit je 1 Leser, danach 1 | vorher 2 mit je 1 Leser, danach 1 | ✓ |
+| S5 | Live ohne `batch-writer` und Datenbank, 100 Nachrichten | 100 am Stream nach 5 s, 100 in der Tabelle 5 s nach dem Start | 100 am Stream, 100 in der Tabelle nach höchstens 90 s | ✓ |
+| S6 | Instanz A angehalten, 5000 Nachrichten über B | grösster Wert 1000, 5000 beim Client an B, danach 2 Live-Queues mit je 1 Leser, 1 beim Client an A | höchstens 1000, 5000, 2 mit je 1 Leser, 1 | ✓ |
+| S7 | Nachholen mit `Last-Event-ID`, 50 verpasste Nachrichten | 1 2 … 50, 0 doppelt, danach live: `danach` | 1 2 … 50, 0 doppelt, `danach` | ✓ |
+| S8 | Regeln im Quelltext | 0 Stream-Treffer, `CommentRulesTest` grün, `git ls-files .env` leer | keine Treffer, Test grün, leere Ausgabe | ✓ |
+| Z1 | Format des Ereignisses | curl Exit 28, `Content-Type: text/event-stream`, ein Ereignis mit `id:` und `data:`, danach eine Leerzeile | 28, `text/event-stream`, `id:` und `data:`, Leerzeile | ✓ |
+| Z2 | unbekannte `Last-Event-ID` | Status 200, erstes Ereignis `event:reload` | Status 200, zuerst `event: reload` | ✓ |
+
+Zum grössten Wert 1000 in S6: Das Skript hält nur den grössten Wert über alle Live-Queues fest, nicht, welche Queue ihn hatte. Weil alle 5000 beim Client an B angekommen sind, hat die Queue von B nichts weggeworfen. Die 1000 passt darum zur Queue der angehaltenen Instanz A, die bis an die Grenze vollläuft, bis RabbitMQ sie nach dem Heartbeat löscht.
